@@ -59,8 +59,12 @@ import xml.etree.ElementTree as ET
 
 appcast_url = os.environ["APPCAST_URL"]
 requested = os.environ["REQUESTED_VERSION"]
+appcast_request = urllib.request.Request(
+    appcast_url,
+    headers={"User-Agent": "Linex/1.0 (+https://github.com/nxjaime/linex-project)"},
+)
 
-with urllib.request.urlopen(appcast_url, timeout=30) as response:
+with urllib.request.urlopen(appcast_request, timeout=30) as response:
     root = ET.fromstring(response.read())
 
 sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"

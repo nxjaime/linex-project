@@ -6,6 +6,10 @@ CONTROLLER="$LAB_ROOT/scripts/linex-release.sh"
 TEST_ROOT="$(mktemp -d)"
 LIVE_ROOT="$TEST_ROOT/live+[install]"
 APPCAST="$TEST_ROOT/appcast.xml"
+APPCAST_HEADER_SERVER="$TEST_ROOT/appcast header server.py"
+APPCAST_HEADER_LOG="$TEST_ROOT/appcast header.log"
+APPCAST_HEADER_PORT="$TEST_ROOT/appcast header.port"
+APPCAST_HEADER_PID=""
 FAKE_PORT="$TEST_ROOT/fake port.sh"
 FAILING_PORT="$TEST_ROOT/failing port.sh"
 FAKE_SMOKE="$TEST_ROOT/fake smoke.sh"
@@ -17,6 +21,9 @@ FAKE_BIN="$TEST_ROOT/fake bin"
 output=""
 
 cleanup() {
+  if [ -n "$APPCAST_HEADER_PID" ]; then
+    kill "$APPCAST_HEADER_PID" 2>/dev/null || true
+  fi
   rm -rf "$TEST_ROOT"
 }
 
@@ -241,6 +248,33 @@ cat > "$APPCAST" <<'XML'
 </rss>
 XML
 
+cat > "$APPCAST_HEADER_SERVER" <<'PY'
+import http.server
+import pathlib
+import sys
+
+header_log = pathlib.Path(sys.argv[1])
+appcast = pathlib.Path(sys.argv[2]).read_bytes()
+
+
+class AppcastHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        header_log.write_text(self.headers.get("User-Agent", ""))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Length", str(len(appcast)))
+        self.end_headers()
+        self.wfile.write(appcast)
+
+    def log_message(self, format, *args):
+        pass
+
+
+server = http.server.HTTPServer(("127.0.0.1", 0), AppcastHandler)
+print(server.server_address[1], flush=True)
+server.handle_request()
+PY
+
 cat > "$FAKE_PORT" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -336,6 +370,30 @@ SH
 
 chmod +x "$FAKE_PORT" "$FAILING_PORT" "$FAKE_SMOKE" "$FAKE_ACCEPTANCE" \
   "$NOT_RUNNING" "$RUNNING" "$PROCESS_ERROR" "$FAKE_BIN/pgrep"
+
+python3 "$APPCAST_HEADER_SERVER" "$APPCAST_HEADER_LOG" "$APPCAST" > "$APPCAST_HEADER_PORT" &
+APPCAST_HEADER_PID=$!
+for _ in {1..100}; do
+  [ -s "$APPCAST_HEADER_PORT" ] && break
+  sleep 0.01
+done
+[ -s "$APPCAST_HEADER_PORT" ] || fail 'appcast header fixture did not start'
+
+if ! output="$(
+  LINEX_INSTALL_ROOT="$LIVE_ROOT" \
+  LINEX_APPCAST_URL="http://127.0.0.1:$(cat "$APPCAST_HEADER_PORT")/appcast.xml" \
+  LINEX_PORT_COMMAND="$FAKE_PORT" \
+  LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
+  LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
+  LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+    "$CONTROLLER" check 2>&1
+)"; then
+  fail "command failed: check against appcast header fixture"$'\n'"$output"
+fi
+wait "$APPCAST_HEADER_PID"
+APPCAST_HEADER_PID=""
+[ "$(cat "$APPCAST_HEADER_LOG")" = 'Linex/1.0 (+https://github.com/nxjaime/linex-project)' ] \
+  || fail 'read_appcast_item did not send the Linex appcast User-Agent'
 
 state_before_check="$(find "$LIVE_ROOT" -printf '%P|%y|%l\n' | sort)"
 run check
