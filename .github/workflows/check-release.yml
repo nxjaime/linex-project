@@ -1,0 +1,63 @@
+name: Check upstream Codex app release
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: appcast
+        name: Read the latest upstream build
+        env:
+          APPCAST_URL: https://persistent.oaistatic.com/codex-app-prod/appcast.xml
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import urllib.request
+          import xml.etree.ElementTree as ET
+
+          root = ET.fromstring(urllib.request.urlopen(os.environ["APPCAST_URL"], timeout=30).read())
+          item = root.find("./channel/item")
+          sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+          print(f"version={item.findtext(sparkle + 'shortVersionString')}")
+          print(f"build={item.findtext(sparkle + 'version')}")
+          PY
+
+      - id: baseline
+        name: Read the verified baseline
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          from pathlib import Path
+
+          for line in Path("docs/compatibility.md").read_text().splitlines():
+              fields = [field.strip() for field in line.split("|")]
+              if len(fields) >= 6 and fields[2].isdigit():
+                  print(f"version={fields[1]}")
+                  print(f"build={fields[2]}")
+                  break
+          else:
+              raise SystemExit("No compatibility baseline found")
+          PY
+
+      - name: Open a verification issue for a new build
+        if: steps.appcast.outputs.version != steps.baseline.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST_VERSION: ${{ steps.appcast.outputs.version }}
+          LATEST_BUILD: ${{ steps.appcast.outputs.build }}
+          VERIFIED_VERSION: ${{ steps.baseline.outputs.version }}
+        run: |
+          title="Verify Codex app ${LATEST_VERSION} on Linux Mint"
+          if gh issue list --state open --search "\"${title}\" in:title" --json title --jq 'length > 0' | grep -qx true; then
+            exit 0
+          fi
+          gh issue create --title "$title" --body "Upstream build ${LATEST_BUILD} is newer than the verified Linux Mint baseline ${VERIFIED_VERSION}. Rebuild, run the smoke tests, perform a human desktop verification, then update docs/compatibility.md before closing this issue."

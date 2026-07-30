@@ -68,6 +68,17 @@ cd <project-dir>
 bash ./port-codex-app-mint.sh --fresh
 ```
 
+Update an existing port safely:
+
+```bash
+cd <project-dir>
+bash ./update-codex-app-mint.sh
+```
+
+The updater reads the official release feed, builds into a staging directory,
+verifies the staged version, and keeps the previous runtime as a rollback copy.
+Codex Desktop must be closed before the final replacement.
+
 Skip desktop entry refresh:
 
 ```bash
@@ -100,3 +111,23 @@ If OpenAI changes the bundle structure, the patch step may need to be updated.
 ## License
 
 This repository is licensed under the MIT License. See [LICENSE](./LICENSE).
+## Experimental Browser and Computer Use
+
+The Linux port includes a compatibility implementation for Codex Browser and an
+X11 desktop-control MVP. Browser support is configured automatically.
+
+Desktop control is disabled by default. Start Codex with:
+
+```bash
+CODEX_LINUX_COMPUTER_USE=1 ./runtime/codex-app/start.sh
+```
+
+Desktop control currently targets Linux Mint Cinnamon on X11. It requires an
+active `DISPLAY`, `wmctrl`, `xrandr`, `gnome-screenshot`, Python 3, and the X11
+and XTest shared libraries. Wayland is rejected with a clear error.
+
+Run the compatibility smoke tests after building:
+
+```bash
+node tests/linux-automation-smoke.mjs
+```

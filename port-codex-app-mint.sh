@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
 PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-linux-window-ui.js"
 NATIVE_MODULE_PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-native-module-loaders.js"
+LINUX_AUTOMATION_INSTALL_SCRIPT="$PROJECT_DIR/scripts/install-linux-automation.js"
+LINUX_BROWSER_ROUTE_PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-linux-browser-route.js"
+LINUX_RUNTIME_DIR="$PROJECT_DIR/linux-runtime"
 DESKTOP_TEMPLATE="$PROJECT_DIR/templates/codex-desktop.desktop.in"
 
 OUTPUT_ROOT="${CODEX_PORT_OUTPUT_ROOT:-$PROJECT_DIR/runtime}"
@@ -280,6 +283,11 @@ patch_asar() {
     node "$PATCH_SCRIPT" "$extracted_asar_dir" >&2
   fi
 
+  if [ -f "$LINUX_BROWSER_ROUTE_PATCH_SCRIPT" ]; then
+    info "Patching Linux Browser session routing"
+    node "$LINUX_BROWSER_ROUTE_PATCH_SCRIPT" "$extracted_asar_dir" >&2
+  fi
+
   info "Repacking app.asar"
   cd "$WORK_DIR"
   rm -rf "$WORK_DIR/app.asar.unpacked"
@@ -325,8 +333,12 @@ download_electron_runtime() {
 }
 
 install_app_files() {
+  local extracted_app_dir="$1"
   local extracted_asar_dir="$WORK_DIR/app-extracted"
+  local upstream_resources_dir="$extracted_app_dir/Contents/Resources"
   local icon_source=""
+  local app_version=""
+  local app_build=""
 
   mkdir -p "$INSTALL_DIR/resources" "$INSTALL_DIR/content/webview"
 
@@ -334,6 +346,17 @@ install_app_files() {
 
   if [ -d "$WORK_DIR/app.asar.unpacked" ]; then
     cp -R "$WORK_DIR/app.asar.unpacked" "$INSTALL_DIR/resources/"
+  fi
+
+  if [ -d "$upstream_resources_dir/plugins" ]; then
+    cp -R "$upstream_resources_dir/plugins" "$INSTALL_DIR/resources/"
+  else
+    warn "No bundled plugins directory found in the app bundle"
+  fi
+
+  if [ -f "$LINUX_AUTOMATION_INSTALL_SCRIPT" ]; then
+    info "Installing Linux Browser and Computer Use compatibility runtime"
+    node "$LINUX_AUTOMATION_INSTALL_SCRIPT" "$INSTALL_DIR" "$LINUX_RUNTIME_DIR"
   fi
 
   if [ -d "$extracted_asar_dir/webview" ]; then
@@ -349,6 +372,11 @@ install_app_files() {
   else
     warn "No webview directory found in the extracted app.asar"
   fi
+
+  app_version="$(node -p "require('$extracted_asar_dir/package.json').version")"
+  app_build="$(node -p "require('$extracted_asar_dir/package.json').codexBuildNumber")"
+  printf '%s\n' "$app_version" > "$INSTALL_DIR/app-version"
+  printf '%s\n' "$app_build" > "$INSTALL_DIR/app-build"
 }
 
 create_launcher() {
@@ -436,6 +464,8 @@ start_webview_server() {
 
 main() {
   local codex_cli_path=""
+  local primary_runtime_node="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+  local primary_runtime_modules="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"
 
   codex_cli_path="$(resolve_codex_cli || true)"
   if [ -z "$codex_cli_path" ]; then
@@ -447,6 +477,17 @@ main() {
   export ELECTRON_FORCE_IS_PACKAGED=1
   export NODE_ENV=production
   export CHROME_DESKTOP="${CHROME_DESKTOP:-codex-desktop.desktop}"
+  export CODEX_LINUX_COMPUTER_USE="${CODEX_LINUX_COMPUTER_USE:-1}"
+  export CODEX_ELECTRON_BUNDLED_PLUGINS_RESOURCES_PATH="$SCRIPT_DIR/resources"
+  export CODEX_ELECTRON_BUNDLED_PLUGINS_FORCE_RELOAD="${CODEX_ELECTRON_BUNDLED_PLUGINS_FORCE_RELOAD:-browser}"
+  export CODEX_NODE_REPL_PATH="${CODEX_NODE_REPL_PATH:-$SCRIPT_DIR/resources/cua_node/bin/node_repl}"
+  if [ -x "$primary_runtime_node" ]; then
+    export CODEX_BROWSER_USE_NODE_PATH="${CODEX_BROWSER_USE_NODE_PATH:-$primary_runtime_node}"
+  fi
+  if [ -d "$primary_runtime_modules" ]; then
+    mkdir -p "$SCRIPT_DIR/resources/cua_node/lib"
+    ln -sfn "$primary_runtime_modules" "$SCRIPT_DIR/resources/cua_node/lib/node_modules"
+  fi
 
   start_webview_server
 
@@ -501,7 +542,7 @@ main() {
   extracted_app_dir="$(extract_dmg)"
   patch_asar "$extracted_app_dir"
   download_electron_runtime
-  install_app_files
+  install_app_files "$extracted_app_dir"
   create_launcher
 
   if [ "$INSTALL_DESKTOP_ENTRY" -eq 1 ]; then

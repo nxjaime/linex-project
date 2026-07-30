@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "linux-computer-use": {
+      "command": "./scripts/linux-computer-use",
+      "args": [],
+      "cwd": ".",
+      "env": {
+        "CODEX_LINUX_COMPUTER_USE": "1",
+        "XDG_SESSION_TYPE": "x11"
+      }
+    }
+  }
+}
