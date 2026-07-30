@@ -1,4 +1,7 @@
 runtime/
+runtime/candidates/
+runtime/releases/
+runtime/approvals/
 runtime-next/
 runtime-update/
 .worktrees/
