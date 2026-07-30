@@ -1,6 +1,7 @@
 runtime/
 runtime-next/
 runtime-update/
+.worktrees/
 *.log
 __pycache__/
 *.pyc
