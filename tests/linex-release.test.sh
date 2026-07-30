@@ -7,6 +7,7 @@ TEST_ROOT="$(mktemp -d)"
 LIVE_ROOT="$TEST_ROOT/live+[install]"
 APPCAST="$TEST_ROOT/appcast.xml"
 FAKE_PORT="$TEST_ROOT/fake port.sh"
+FAILING_PORT="$TEST_ROOT/failing port.sh"
 FAKE_SMOKE="$TEST_ROOT/fake smoke.sh"
 FAKE_ACCEPTANCE="$TEST_ROOT/fake acceptance.sh"
 NOT_RUNNING="$TEST_ROOT/not running.sh"
@@ -119,6 +120,68 @@ run_expect_failure_with_process_check() {
   fi
 }
 
+run_expect_failure_with_port() {
+  local port_command="$1"
+  shift
+
+  if output="$(
+    LINEX_INSTALL_ROOT="$LIVE_ROOT" \
+    LINEX_APPCAST_URL="file://$APPCAST" \
+    LINEX_PORT_COMMAND="$port_command" \
+    LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
+    LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
+    LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+      "$CONTROLLER" "$@" 2>&1
+  )"; then
+    fail "command unexpectedly succeeded: $*"
+  fi
+}
+
+run_expect_failure_for_root() {
+  local install_root="$1"
+  shift
+
+  if output="$(
+    LINEX_INSTALL_ROOT="$install_root" \
+    LINEX_APPCAST_URL="file://$APPCAST" \
+    LINEX_PORT_COMMAND="$FAKE_PORT" \
+    LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
+    LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
+    LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+      "$CONTROLLER" "$@" 2>&1
+  )"; then
+    fail "command unexpectedly succeeded for $install_root: $*"
+  fi
+}
+
+make_candidate() {
+  local install_root="$1"
+  local version="${2:-26.721.81911}"
+  local build="${3:-5973}"
+  local candidate_dir="$install_root/runtime/candidates/$version/codex-app"
+
+  mkdir -p "$candidate_dir"
+  printf '%s\n' "$version" > "$candidate_dir/app-version"
+  printf '%s\n' "$build" > "$candidate_dir/app-build"
+  printf '%s\n' 'focused-candidate' > "$candidate_dir/candidate-sentinel"
+}
+
+make_approval() {
+  local install_root="$1"
+  local version="${2:-26.721.81911}"
+  local build="${3:-5973}"
+  local approvals_root="$install_root/runtime/approvals"
+
+  mkdir -p "$approvals_root"
+  chmod 0700 "$approvals_root"
+  {
+    printf 'version=%s\n' "$version"
+    printf 'build=%s\n' "$build"
+    printf 'approved_at=2026-07-29T00:00:00Z\n'
+  } > "$approvals_root/$version.approved"
+  chmod 0600 "$approvals_root/$version.approved"
+}
+
 mkdir -p "$LIVE_ROOT/runtime/codex-app"
 mkdir -p "$FAKE_BIN"
 printf '%s\n' '26.721.41059' > "$LIVE_ROOT/runtime/codex-app/app-version"
@@ -172,6 +235,7 @@ esac
 
 rm -rf "$CODEX_PORT_INSTALL_DIR"
 mkdir -p "$CODEX_PORT_INSTALL_DIR" "$CODEX_PORT_CACHE_DIR"
+printf '%s\n' 'cache-root-write' > "$CODEX_PORT_CACHE_DIR/live-sentinel"
 printf '%s\n' "$version" > "$CODEX_PORT_INSTALL_DIR/app-version"
 printf '%s\n' "$build" > "$CODEX_PORT_INSTALL_DIR/app-build"
 printf '%s\n' 'candidate-runtime' > "$CODEX_PORT_INSTALL_DIR/candidate-sentinel"
@@ -187,6 +251,16 @@ case "$CODEX_APP_RUNTIME_DIR" in
 esac
 [ -f "$CODEX_APP_RUNTIME_DIR/candidate-sentinel" ]
 printf '%s\n' 'smoke-passed' > "$CODEX_APP_RUNTIME_DIR/smoke-result"
+SH
+
+cat > "$FAILING_PORT" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+version="$(basename "$CODEX_PORT_OUTPUT_ROOT")"
+runtime_root="$(dirname "$(dirname "$CODEX_PORT_OUTPUT_ROOT")")"
+[ ! -e "$runtime_root/approvals/$version.approved" ] || exit 56
+exit 55
 SH
 
 cat > "$FAKE_ACCEPTANCE" <<'SH'
@@ -225,7 +299,7 @@ set -Eeuo pipefail
 [[ "$EXPECTED_PROCESS_COMMAND" =~ $2 ]]
 SH
 
-chmod +x "$FAKE_PORT" "$FAKE_SMOKE" "$FAKE_ACCEPTANCE" \
+chmod +x "$FAKE_PORT" "$FAILING_PORT" "$FAKE_SMOKE" "$FAKE_ACCEPTANCE" \
   "$NOT_RUNNING" "$RUNNING" "$PROCESS_ERROR" "$FAKE_BIN/pgrep"
 
 state_before_check="$(find "$LIVE_ROOT" -printf '%P|%y|%l\n' | sort)"
@@ -248,6 +322,14 @@ assert_path_is_dir "$LIVE_ROOT/runtime/codex-app"
 [ "$(cat "$LIVE_ROOT/runtime/codex-app/live-sentinel")" = 'working-live-runtime' ] \
   || fail 'symlinked candidate path changed the live runtime'
 rm "$LIVE_ROOT/runtime/candidates/26.721.81911"
+
+ln -s codex-app "$LIVE_ROOT/runtime/cache"
+run_expect_failure build-candidate 26.721.81911
+assert_contains "$output" 'Unsafe cache path'
+assert_path_is_dir "$LIVE_ROOT/runtime/codex-app"
+[ "$(cat "$LIVE_ROOT/runtime/codex-app/live-sentinel")" = 'working-live-runtime' ] \
+  || fail 'symlinked cache path changed the live runtime'
+rm "$LIVE_ROOT/runtime/cache"
 
 run build-candidate 26.721.81911
 assert_path_is_dir "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app"
@@ -275,6 +357,12 @@ grep -Fxq 'build=5973' "$LIVE_ROOT/runtime/approvals/26.721.81911.approved" \
 grep -Eq '^approved_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
   "$LIVE_ROOT/runtime/approvals/26.721.81911.approved" \
   || fail 'approval marker lacks UTC approval date'
+
+run_expect_failure_with_port "$FAILING_PORT" build-candidate 26.721.81911
+assert_path_does_not_exist "$LIVE_ROOT/runtime/approvals/26.721.81911.approved"
+run_expect_failure promote 26.721.81911
+assert_contains "$output" 'Approve the candidate first'
+run approve 26.721.81911
 
 run promote 26.721.81911
 assert_path_is_symlink "$LIVE_ROOT/runtime/codex-app"
@@ -348,5 +436,87 @@ run_expect_failure rollback 26.721.12345
 assert_contains "$output" 'Release version mismatch'
 [ "$(readlink -f "$LIVE_ROOT/runtime/codex-app")" = "$safe_target" ] \
   || fail 'invalid rollback target changed the live symlink'
+
+case_root="$(mktemp -d "$TEST_ROOT/candidate-approve.XXXXXX")"
+mkdir -p "$case_root/runtime/candidates" "$case_root/redirected-version"
+ln -s "$case_root/redirected-version" \
+  "$case_root/runtime/candidates/26.721.81911"
+mkdir -p "$case_root/redirected-version/codex-app"
+printf '%s\n' '26.721.81911' > "$case_root/redirected-version/codex-app/app-version"
+printf '%s\n' '5973' > "$case_root/redirected-version/codex-app/app-build"
+run_expect_failure_for_root "$case_root" approve 26.721.81911
+assert_contains "$output" 'Unsafe candidate path'
+assert_path_does_not_exist "$case_root/runtime/approvals/26.721.81911.approved"
+
+case_root="$(mktemp -d "$TEST_ROOT/candidate-promote.XXXXXX")"
+mkdir -p "$case_root/runtime" "$case_root/redirected-candidates"
+ln -s "$case_root/redirected-candidates" "$case_root/runtime/candidates"
+make_candidate "$case_root"
+make_approval "$case_root"
+run_expect_failure_for_root "$case_root" promote 26.721.81911
+assert_contains "$output" 'Unsafe candidate path'
+[ -f "$case_root/redirected-candidates/26.721.81911/codex-app/candidate-sentinel" ] \
+  || fail 'unsafe candidate promotion moved the redirected candidate'
+
+case_root="$(mktemp -d "$TEST_ROOT/approvals-approve.XXXXXX")"
+make_candidate "$case_root"
+mkdir -p "$case_root/redirected-approvals"
+ln -s "$case_root/redirected-approvals" "$case_root/runtime/approvals"
+run_expect_failure_for_root "$case_root" approve 26.721.81911
+assert_contains "$output" 'Unsafe approvals path'
+assert_path_does_not_exist \
+  "$case_root/redirected-approvals/26.721.81911.approved"
+
+case_root="$(mktemp -d "$TEST_ROOT/approvals-promote.XXXXXX")"
+make_candidate "$case_root"
+mkdir -p "$case_root/redirected-approvals"
+ln -s "$case_root/redirected-approvals" "$case_root/runtime/approvals"
+{
+  printf '%s\n' 'version=26.721.81911'
+  printf '%s\n' 'build=5973'
+} > "$case_root/redirected-approvals/26.721.81911.approved"
+run_expect_failure_for_root "$case_root" promote 26.721.81911
+assert_contains "$output" 'Unsafe approvals path'
+assert_path_is_dir "$case_root/runtime/candidates/26.721.81911/codex-app"
+
+case_root="$(mktemp -d "$TEST_ROOT/releases-promote.XXXXXX")"
+make_candidate "$case_root"
+make_approval "$case_root"
+mkdir -p "$case_root/redirected-releases"
+ln -s "$case_root/redirected-releases" "$case_root/runtime/releases"
+run_expect_failure_for_root "$case_root" promote 26.721.81911
+assert_contains "$output" 'Unsafe releases path'
+assert_path_is_dir "$case_root/runtime/candidates/26.721.81911/codex-app"
+assert_path_does_not_exist \
+  "$case_root/redirected-releases/26.721.81911/codex-app"
+
+case_root="$(mktemp -d "$TEST_ROOT/releases-rollback.XXXXXX")"
+mkdir -p "$case_root/runtime" \
+  "$case_root/redirected-releases/26.721.81911/codex-app"
+ln -s "$case_root/redirected-releases" "$case_root/runtime/releases"
+printf '%s\n' '26.721.81911' \
+  > "$case_root/redirected-releases/26.721.81911/codex-app/app-version"
+run_expect_failure_for_root "$case_root" rollback 26.721.81911
+assert_contains "$output" 'Unsafe releases path'
+assert_path_does_not_exist "$case_root/runtime/codex-app"
+
+case_root="$(mktemp -d "$TEST_ROOT/candidate-metadata.XXXXXX")"
+make_candidate "$case_root"
+printf '%s\n' '5973' > "$case_root/redirected-build"
+rm "$case_root/runtime/candidates/26.721.81911/codex-app/app-build"
+ln -s "$case_root/redirected-build" \
+  "$case_root/runtime/candidates/26.721.81911/codex-app/app-build"
+run_expect_failure_for_root "$case_root" approve 26.721.81911
+assert_contains "$output" 'Unsafe metadata path'
+assert_path_does_not_exist "$case_root/runtime/approvals/26.721.81911.approved"
+
+case_root="$(mktemp -d "$TEST_ROOT/release-metadata.XXXXXX")"
+mkdir -p "$case_root/runtime/releases/26.721.81911/codex-app"
+printf '%s\n' '26.721.81911' > "$case_root/redirected-version"
+ln -s "$case_root/redirected-version" \
+  "$case_root/runtime/releases/26.721.81911/codex-app/app-version"
+run_expect_failure_for_root "$case_root" rollback 26.721.81911
+assert_contains "$output" 'Unsafe metadata path'
+assert_path_does_not_exist "$case_root/runtime/codex-app"
 
 printf 'Linex release controller tests passed.\n'

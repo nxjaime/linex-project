@@ -10,6 +10,10 @@ PORT_COMMAND="${LINEX_PORT_COMMAND:-$LAB_ROOT/port-codex-app-mint.sh}"
 APPCAST_VERSION=""
 APPCAST_BUILD=""
 APPCAST_ARCHIVE_URL=""
+RUNTIME_REAL=""
+SAFE_SUBDIR_PRESENT=""
+SAFE_SUBDIR_REAL=""
+RELEASES_REAL=""
 
 error() {
   printf 'Error: %s\n' "$*" >&2
@@ -108,19 +112,88 @@ read_metadata() {
   local metadata_name="$2"
   local metadata_path="$runtime_dir/$metadata_name"
 
+  [ ! -L "$metadata_path" ] \
+    || error "Unsafe metadata path: $metadata_path"
   [ -f "$metadata_path" ] || error "Missing $metadata_name in $runtime_dir"
   cat "$metadata_path"
 }
 
+require_safe_runtime_root() {
+  local install_real=""
+
+  [ -d "$INSTALL_ROOT" ] && [ ! -L "$INSTALL_ROOT" ] \
+    || error "Unsafe install path: $INSTALL_ROOT"
+  [ -d "$RUNTIME_ROOT" ] && [ ! -L "$RUNTIME_ROOT" ] \
+    || error "Unsafe runtime path: $RUNTIME_ROOT"
+
+  install_real="$(realpath -e "$INSTALL_ROOT")"
+  RUNTIME_REAL="$(realpath -e "$RUNTIME_ROOT")"
+  [ "$RUNTIME_REAL" = "$install_real/runtime" ] \
+    || error "Unsafe runtime path: $RUNTIME_ROOT"
+}
+
+validate_runtime_subdir_if_present() {
+  local subdir_name="$1"
+  local path_label="$2"
+  local subdir_path="$RUNTIME_ROOT/$subdir_name"
+
+  require_safe_runtime_root
+  SAFE_SUBDIR_PRESENT="no"
+  SAFE_SUBDIR_REAL="$RUNTIME_REAL/$subdir_name"
+
+  if [ ! -e "$subdir_path" ] && [ ! -L "$subdir_path" ]; then
+    return 0
+  fi
+
+  [ -d "$subdir_path" ] && [ ! -L "$subdir_path" ] \
+    || error "Unsafe $path_label path: $subdir_path"
+
+  SAFE_SUBDIR_REAL="$(realpath -e "$subdir_path")"
+  [ "$SAFE_SUBDIR_REAL" = "$RUNTIME_REAL/$subdir_name" ] \
+    || error "Unsafe $path_label path: $subdir_path"
+  SAFE_SUBDIR_PRESENT="yes"
+}
+
+prepare_runtime_subdir() {
+  local subdir_name="$1"
+  local path_label="$2"
+  local subdir_path="$RUNTIME_ROOT/$subdir_name"
+
+  validate_runtime_subdir_if_present "$subdir_name" "$path_label"
+  if [ "$SAFE_SUBDIR_PRESENT" = "no" ]; then
+    mkdir "$subdir_path"
+    validate_runtime_subdir_if_present "$subdir_name" "$path_label"
+  fi
+}
+
 validate_candidate() {
   local version="$1"
+  local candidates_root="$RUNTIME_ROOT/candidates"
+  local candidate_root="$candidates_root/$version"
   local candidate_dir="$RUNTIME_ROOT/candidates/$version/codex-app"
+  local candidates_real=""
+  local candidate_root_real=""
+  local candidate_dir_real=""
   local candidate_version=""
   local candidate_build=""
 
   resolve_appcast_item "$version"
-  [ -d "$candidate_dir" ] && [ ! -L "$candidate_dir" ] \
+  validate_runtime_subdir_if_present candidates candidate
+  [ "$SAFE_SUBDIR_PRESENT" = "yes" ] \
     || error "Candidate not found: $version"
+  candidates_real="$SAFE_SUBDIR_REAL"
+
+  [ -d "$candidate_root" ] && [ ! -L "$candidate_root" ] \
+    || error "Unsafe candidate path: $candidate_root"
+  candidate_root_real="$(realpath -e "$candidate_root")"
+  [ "$candidate_root_real" = "$candidates_real/$version" ] \
+    || error "Unsafe candidate path: $candidate_root"
+
+  [ -d "$candidate_dir" ] && [ ! -L "$candidate_dir" ] \
+    || error "Unsafe candidate path: $candidate_dir"
+  candidate_dir_real="$(realpath -e "$candidate_dir")"
+  [ "$candidate_dir_real" = "$candidate_root_real/codex-app" ] \
+    || error "Unsafe candidate path: $candidate_dir"
 
   candidate_version="$(read_metadata "$candidate_dir" app-version)"
   candidate_build="$(read_metadata "$candidate_dir" app-build)"
@@ -140,12 +213,8 @@ prepare_candidate_path() {
   local candidate_root_real=""
   local candidate_dir_real=""
 
-  if [ -e "$candidates_root" ] || [ -L "$candidates_root" ]; then
-    [ -d "$candidates_root" ] && [ ! -L "$candidates_root" ] \
-      || error "Unsafe candidate path: $candidates_root"
-  else
-    mkdir -p "$candidates_root"
-  fi
+  prepare_runtime_subdir candidates candidate
+  candidates_real="$SAFE_SUBDIR_REAL"
 
   if [ -e "$candidate_root" ] || [ -L "$candidate_root" ]; then
     [ -d "$candidate_root" ] && [ ! -L "$candidate_root" ] \
@@ -159,7 +228,6 @@ prepare_candidate_path() {
       || error "Unsafe candidate path: $candidate_dir"
   fi
 
-  candidates_real="$(realpath -e "$candidates_root")"
   candidate_root_real="$(realpath -e "$candidate_root")"
   [ "$candidate_root_real" = "$candidates_real/$version" ] \
     || error "Unsafe candidate path: $candidate_root"
@@ -169,6 +237,62 @@ prepare_candidate_path() {
     [ "$candidate_dir_real" = "$candidate_root_real/codex-app" ] \
       || error "Unsafe candidate path: $candidate_dir"
   fi
+}
+
+prepare_cache_path() {
+  local cache_root="$RUNTIME_ROOT/cache"
+
+  prepare_runtime_subdir cache cache
+  [ "$SAFE_SUBDIR_REAL" = "$RUNTIME_REAL/cache" ] \
+    || error "Unsafe cache path: $cache_root"
+}
+
+validate_approvals_root_if_present() {
+  validate_runtime_subdir_if_present approvals approvals
+}
+
+invalidate_approval() {
+  local version="$1"
+  local approval_marker="$RUNTIME_ROOT/approvals/$version.approved"
+
+  validate_approvals_root_if_present
+  if [ -e "$approval_marker" ] || [ -L "$approval_marker" ]; then
+    rm -f -- "$approval_marker"
+  fi
+}
+
+validate_releases_root_if_present() {
+  validate_runtime_subdir_if_present releases releases
+  RELEASES_REAL="$SAFE_SUBDIR_REAL"
+}
+
+prepare_releases_root() {
+  prepare_runtime_subdir releases releases
+  RELEASES_REAL="$SAFE_SUBDIR_REAL"
+}
+
+validate_release_dir() {
+  local version="$1"
+  local release_parent="$RUNTIME_ROOT/releases/$version"
+  local release_dir="$release_parent/codex-app"
+  local release_parent_real=""
+  local release_dir_real=""
+
+  validate_releases_root_if_present
+  [ "$SAFE_SUBDIR_PRESENT" = "yes" ] \
+    || error "Release not found: $version"
+
+  [ -d "$release_parent" ] && [ ! -L "$release_parent" ] \
+    || error "Unsafe release path: $release_parent"
+  release_parent_real="$(realpath -e "$release_parent")"
+  [ "$release_parent_real" = "$RELEASES_REAL/$version" ] \
+    || error "Unsafe release path: $release_parent"
+
+  [ -d "$release_dir" ] && [ ! -L "$release_dir" ] \
+    || error "Unsafe release path: $release_dir"
+  release_dir_real="$(realpath -e "$release_dir")"
+  [ "$release_dir_real" = "$release_parent_real/codex-app" ] \
+    || error "Unsafe release path: $release_dir"
 }
 
 run_smoke_test() {
@@ -274,7 +398,9 @@ command_build_candidate() {
 
   candidate_root="$RUNTIME_ROOT/candidates/$APPCAST_VERSION"
   candidate_dir="$candidate_root/codex-app"
+  invalidate_approval "$APPCAST_VERSION"
   prepare_candidate_path "$APPCAST_VERSION"
+  prepare_cache_path
 
   CODEX_PORT_OUTPUT_ROOT="$candidate_root" \
   CODEX_PORT_INSTALL_DIR="$candidate_dir" \
@@ -298,7 +424,11 @@ command_approve() {
   require_safe_version "$version"
   validate_candidate "$version"
 
-  install -d -m 0700 "$approvals_dir"
+  validate_approvals_root_if_present
+  if [ "$SAFE_SUBDIR_PRESENT" = "no" ]; then
+    install -d -m 0700 "$approvals_dir"
+    validate_approvals_root_if_present
+  fi
   chmod 0700 "$approvals_dir"
   (
     umask 077
@@ -326,8 +456,13 @@ command_promote() {
   local adopted_release_dir=""
 
   require_safe_version "$version"
-  [ -f "$approval_marker" ] \
-    || error "Approve the candidate first: $version"
+  validate_approvals_root_if_present
+  if [ "$SAFE_SUBDIR_PRESENT" = "no" ] \
+    || { [ ! -e "$approval_marker" ] && [ ! -L "$approval_marker" ]; }; then
+    error "Approve the candidate first: $version"
+  fi
+  [ -f "$approval_marker" ] && [ ! -L "$approval_marker" ] \
+    || error "Unsafe approval marker: $approval_marker"
 
   validate_candidate "$version"
   grep -Fxq "version=$APPCAST_VERSION" "$approval_marker" \
@@ -335,6 +470,7 @@ command_promote() {
   grep -Fxq "build=$APPCAST_BUILD" "$approval_marker" \
     || error "Approval marker build mismatch: $version"
 
+  validate_releases_root_if_present
   [ ! -e "$release_parent" ] && [ ! -L "$release_parent" ] \
     || error "Release already exists: $version"
 
@@ -354,15 +490,15 @@ command_promote() {
   fi
 
   ensure_not_running
-  mkdir -p "$releases_root"
+  prepare_releases_root
 
   if [ -n "$adopted_version" ]; then
-    mkdir -p "$adopted_release_parent"
+    mkdir "$adopted_release_parent"
     mv "$active_dir" "$adopted_release_dir"
     switch_active_release "$adopted_version"
   fi
 
-  mkdir -p "$release_parent"
+  mkdir "$release_parent"
   mv "$candidate_dir" "$release_dir"
   switch_active_release "$version"
 
@@ -375,8 +511,7 @@ command_rollback() {
   local release_version=""
 
   require_safe_version "$version"
-  [ -d "$release_dir" ] && [ ! -L "$release_dir" ] \
-    || error "Release not found: $version"
+  validate_release_dir "$version"
 
   release_version="$(read_metadata "$release_dir" app-version)"
   [ "$release_version" = "$version" ] \
