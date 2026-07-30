@@ -4,7 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const runtimeDir = path.join(projectDir, "runtime", "codex-app");
+const runtimeDir = process.env.CODEX_APP_RUNTIME_DIR
+  ? path.resolve(process.env.CODEX_APP_RUNTIME_DIR)
+  : path.join(projectDir, "runtime", "codex-app");
 
 class McpClient {
   constructor(command, env = process.env) {
