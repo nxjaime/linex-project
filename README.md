@@ -80,16 +80,33 @@ cd <project-dir>
 bash ./port-codex-app-mint.sh --fresh
 ```
 
-Update an existing port safely:
+Build, verify, and release an update safely:
 
 ```bash
 cd <project-dir>
-bash ./update-codex-app-mint.sh
+./scripts/linex-release.sh check
+./scripts/linex-release.sh build-candidate 26.721.81911
+# Launch the candidate and perform the listed human checks.
+./scripts/linex-release.sh approve 26.721.81911
+./scripts/linex-release.sh promote 26.721.81911
+./scripts/linex-release.sh rollback 26.721.41059
 ```
 
-The updater reads the official release feed, builds into a staging directory,
-verifies the staged version, and keeps the previous runtime as a rollback copy.
-Codex Desktop must be closed before the final replacement.
+`check` is read-only. `build-candidate` builds and tests an isolated candidate;
+it does not replace the live runtime. Before `approve`, launch that candidate's
+`start.sh` and verify all of the following on Linux Mint:
+
+1. It launches from its candidate `start.sh`.
+2. Sign-in and existing conversations remain available.
+3. A local project opens and a safe read-only task runs.
+4. Git/diff and terminal views open.
+5. The browser and computer-use smoke tests passed during the candidate build.
+
+`approve` records this human decision locally, but does not change the live
+installation. `promote` is the operation that changes the live installation;
+it requires approval and the desktop app to be closed. It keeps the prior
+approved release for `rollback`. Do not approve or promote a candidate that
+fails any human check.
 
 Skip desktop entry refresh:
 

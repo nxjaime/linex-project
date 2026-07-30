@@ -37,6 +37,14 @@ assert_contains() {
   esac
 }
 
+assert_file_contains() {
+  local path="$1"
+  local expected="$2"
+
+  grep -Fq -- "$expected" "$path" \
+    || fail "expected $path to contain '$expected'"
+}
+
 assert_path_is_dir() {
   [ -d "$1" ] && [ ! -L "$1" ] || fail "expected directory: $1"
 }
@@ -560,5 +568,10 @@ run_approve_with_legacy_marker \
 grep -Fxq 'version=26.721.81911' \
   "$case_root/runtime/approvals/26.721.81911.approved" \
   || fail 'approval marker was not atomically created after legacy marker precreation'
+
+assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh build-candidate'
+assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh approve'
+assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh promote'
+assert_file_contains "$LAB_ROOT/docs/compatibility.md" 'mint-app-<upstream-version>'
 
 printf 'Linex release controller tests passed.\n'
