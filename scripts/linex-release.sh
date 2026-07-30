@@ -419,7 +419,6 @@ command_approve() {
   local version="$1"
   local approvals_dir="$RUNTIME_ROOT/approvals"
   local marker_path="$approvals_dir/$version.approved"
-  local temporary_marker="$approvals_dir/.$version.approved.$$"
 
   require_safe_version "$version"
   validate_candidate "$version"
@@ -432,13 +431,16 @@ command_approve() {
   chmod 0700 "$approvals_dir"
   (
     umask 077
+    temporary_marker="$(mktemp "$approvals_dir/.$version.approved.XXXXXX")"
+    trap 'rm -f -- "$temporary_marker"' EXIT
     {
       printf 'version=%s\n' "$APPCAST_VERSION"
       printf 'build=%s\n' "$APPCAST_BUILD"
       printf 'approved_at=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
     } > "$temporary_marker"
+    mv -Tf -- "$temporary_marker" "$marker_path"
+    trap - EXIT
   )
-  mv -f "$temporary_marker" "$marker_path"
 
   printf 'Approved candidate: %s (build %s)\n' "$APPCAST_VERSION" "$APPCAST_BUILD"
 }

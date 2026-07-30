@@ -154,6 +154,33 @@ run_expect_failure_for_root() {
   fi
 }
 
+run_approve_with_legacy_marker() {
+  local install_root="$1"
+  local version="$2"
+  local sentinel="$3"
+
+  if ! output="$(
+    LINEX_INSTALL_ROOT="$install_root" \
+    LINEX_APPCAST_URL="file://$APPCAST" \
+    LINEX_PORT_COMMAND="$FAKE_PORT" \
+    LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
+    LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
+    LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+      bash -c '
+        controller="$1"
+        command_name="$2"
+        version="$3"
+        sentinel="$4"
+        legacy_marker="$LINEX_INSTALL_ROOT/runtime/approvals/.$version.approved.$$"
+        ln -s "$sentinel" "$legacy_marker"
+        set -- "$command_name" "$version"
+        source "$controller"
+      ' bash "$CONTROLLER" approve "$version" "$sentinel" 2>&1
+  )"; then
+    fail "command failed: approve $version"$'\n'"$output"
+  fi
+}
+
 make_candidate() {
   local install_root="$1"
   local version="${2:-26.721.81911}"
@@ -518,5 +545,20 @@ ln -s "$case_root/redirected-version" \
 run_expect_failure_for_root "$case_root" rollback 26.721.81911
 assert_contains "$output" 'Unsafe metadata path'
 assert_path_does_not_exist "$case_root/runtime/codex-app"
+
+case_root="$(mktemp -d "$TEST_ROOT/approval-marker.XXXXXX")"
+make_candidate "$case_root"
+mkdir -p "$case_root/runtime/approvals"
+chmod 0700 "$case_root/runtime/approvals"
+printf '%s\n' 'live-sentinel-unchanged' > "$case_root/live-sentinel"
+run_approve_with_legacy_marker \
+  "$case_root" \
+  26.721.81911 \
+  "$case_root/live-sentinel"
+[ "$(cat "$case_root/live-sentinel")" = 'live-sentinel-unchanged' ] \
+  || fail 'approval temporary marker modified the live sentinel'
+grep -Fxq 'version=26.721.81911' \
+  "$case_root/runtime/approvals/26.721.81911.approved" \
+  || fail 'approval marker was not atomically created after legacy marker precreation'
 
 printf 'Linex release controller tests passed.\n'
