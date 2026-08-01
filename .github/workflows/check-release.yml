@@ -25,7 +25,11 @@ jobs:
           import urllib.request
           import xml.etree.ElementTree as ET
 
-          root = ET.fromstring(urllib.request.urlopen(os.environ["APPCAST_URL"], timeout=30).read())
+          request = urllib.request.Request(
+              os.environ["APPCAST_URL"],
+              headers={"User-Agent": "Linex/1.0 (+https://github.com/nxjaime/linex-project)"},
+          )
+          root = ET.fromstring(urllib.request.urlopen(request, timeout=30).read())
           item = root.find("./channel/item")
           sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
           print(f"version={item.findtext(sparkle + 'shortVersionString')}")
