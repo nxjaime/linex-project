@@ -2,6 +2,7 @@
 
 | Upstream app version | Internal build | Linux Mint status | Verified on | Notes |
 | --- | ---: | --- | --- | --- |
+| 26.727.51351 | 6119 | Verified locally | 2026-08-01 | Human-approved remote handoff; stable runtime promoted with automatic rollback health check. |
 | 26.721.41059 | 5848 | Verified locally | 2026-07-29 | Current local runtime baseline. |
 
 An upstream build is a candidate until a maintainer has rebuilt it and verified
