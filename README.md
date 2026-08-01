@@ -89,7 +89,16 @@ cd <project-dir>
 # Launch the candidate and perform the listed human checks.
 ./scripts/linex-release.sh approve 26.721.81911
 ./scripts/linex-release.sh promote 26.721.81911
+# Close the current desktop app. The queued local service switches and opens
+# the approved replacement after it exits.
+./scripts/linex-release.sh handoff-status
 ./scripts/linex-release.sh rollback 26.721.41059
+```
+
+Cancel only a pending handoff, before the current app closes:
+
+```bash
+./scripts/linex-release.sh handoff-cancel
 ```
 
 `check` is read-only. `build-candidate` builds and tests an isolated candidate;
@@ -103,10 +112,20 @@ it does not replace the live runtime. Before `approve`, launch that candidate's
 5. The browser and computer-use smoke tests passed during the candidate build.
 
 `approve` records this human decision locally, but does not change the live
-installation. `promote` is the operation that changes the live installation;
-it requires approval and the desktop app to be closed. It keeps the prior
-approved release for `rollback`. Do not approve or promote a candidate that
-fails any human check.
+installation. `promote` requires approval and queues a local handoff; it does
+not change the running app. The handoff waits for Codex Desktop to close, then
+atomically activates and launches the approved release. It keeps the prior
+release for rollback. A replacement must remain running for 45 seconds to be
+considered healthy; otherwise the handoff restores and relaunches the prior
+release. Do not approve or promote a candidate that fails any human check.
+
+Use `handoff-status` to inspect a pending/running handoff or its last result.
+Use `handoff-cancel` only before the old app has closed; it removes a pending
+handoff without changing the active runtime. The result and runner log remain
+local under `runtime/handoffs/`, and a desktop notification is shown when the
+handoff succeeds, rolls back, or fails. Reconnect from the phone after the
+replacement opens; this local mechanism cannot preserve the previous desktop
+conversation.
 
 Skip desktop entry refresh:
 

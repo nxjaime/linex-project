@@ -6,7 +6,10 @@
 
 An upstream build is a candidate until a maintainer has rebuilt it and verified
 it on Linux Mint. Automated checks may open a verification issue, but only a
-human verification may mark the build supported.
+human verification may mark the build supported. After approval, promotion is
+a queued handoff: the active app closes first, then the local runner switches
+and launches the candidate. Record a compatibility result only after the
+replacement has opened and the maintainer has reconnected to verify it.
 
 After human verification and promotion, add the approved build's version,
 internal build, status, and verification date to the table above, then record

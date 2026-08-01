@@ -6,6 +6,7 @@ INSTALL_ROOT="${LINEX_INSTALL_ROOT:-/home/nickj/codex-app-mint}"
 RUNTIME_ROOT="$INSTALL_ROOT/runtime"
 APPCAST_URL="${LINEX_APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast.xml}"
 PORT_COMMAND="${LINEX_PORT_COMMAND:-$LAB_ROOT/port-codex-app-mint.sh}"
+HANDOFF_RUNNER="${LINEX_HANDOFF_RUNNER:-$LAB_ROOT/scripts/linex-handoff-runner.sh}"
 
 APPCAST_VERSION=""
 APPCAST_BUILD=""
@@ -30,6 +31,8 @@ Commands:
   approve <version>
   promote <version>
   rollback <version>
+  handoff-status
+  handoff-cancel
 EOF
 }
 
@@ -208,6 +211,43 @@ validate_candidate() {
     || error "Candidate build mismatch: expected $APPCAST_BUILD, found $candidate_build"
 }
 
+validate_candidate_from_handoff() {
+  local version="$1"
+  local expected_build="$2"
+  local candidates_root="$RUNTIME_ROOT/candidates"
+  local candidate_root="$candidates_root/$version"
+  local candidate_dir="$candidate_root/codex-app"
+  local candidates_real=""
+  local candidate_root_real=""
+  local candidate_dir_real=""
+  local candidate_version=""
+  local candidate_build=""
+
+  require_safe_version "$version"
+  [[ "$expected_build" =~ ^[0-9]+$ ]] \
+    || error "Invalid handoff build: $expected_build"
+  validate_runtime_subdir_if_present candidates candidate
+  [ "$SAFE_SUBDIR_PRESENT" = "yes" ] \
+    || error "Candidate not found: $version"
+  candidates_real="$SAFE_SUBDIR_REAL"
+  [ -d "$candidate_root" ] && [ ! -L "$candidate_root" ] \
+    || error "Unsafe candidate path: $candidate_root"
+  candidate_root_real="$(realpath -e "$candidate_root")"
+  [ "$candidate_root_real" = "$candidates_real/$version" ] \
+    || error "Unsafe candidate path: $candidate_root"
+  [ -d "$candidate_dir" ] && [ ! -L "$candidate_dir" ] \
+    || error "Unsafe candidate path: $candidate_dir"
+  candidate_dir_real="$(realpath -e "$candidate_dir")"
+  [ "$candidate_dir_real" = "$candidate_root_real/codex-app" ] \
+    || error "Unsafe candidate path: $candidate_dir"
+  candidate_version="$(read_metadata "$candidate_dir" app-version)"
+  candidate_build="$(read_metadata "$candidate_dir" app-build)"
+  [ "$candidate_version" = "$version" ] \
+    || error "Candidate version mismatch: expected $version, found $candidate_version"
+  [ "$candidate_build" = "$expected_build" ] \
+    || error "Candidate build mismatch: expected $expected_build, found $candidate_build"
+}
+
 prepare_candidate_path() {
   local version="$1"
   local candidates_root="$RUNTIME_ROOT/candidates"
@@ -268,6 +308,114 @@ invalidate_approval() {
 validate_releases_root_if_present() {
   validate_runtime_subdir_if_present releases releases
   RELEASES_REAL="$SAFE_SUBDIR_REAL"
+}
+
+validate_handoffs_root_if_present() {
+  validate_runtime_subdir_if_present handoffs handoffs
+}
+
+prepare_handoffs_root() {
+  validate_handoffs_root_if_present
+  if [ "$SAFE_SUBDIR_PRESENT" = "no" ]; then
+    install -d -m 0700 "$RUNTIME_ROOT/handoffs"
+    validate_handoffs_root_if_present
+  fi
+  chmod 0700 "$RUNTIME_ROOT/handoffs"
+}
+
+handoff_state_path() {
+  local state_name="$1"
+  printf '%s\n' "$RUNTIME_ROOT/handoffs/$state_name"
+}
+
+validate_handoff_state_if_present() {
+  local state_name="$1"
+  local state_path="$(handoff_state_path "$state_name")"
+
+  validate_handoffs_root_if_present
+  [ "$SAFE_SUBDIR_PRESENT" = "yes" ] || return 0
+  [ ! -e "$state_path" ] && [ ! -L "$state_path" ] && return 0
+  [ -f "$state_path" ] && [ ! -L "$state_path" ] \
+    || error "Unsafe handoff state path: $state_path"
+}
+
+write_handoff_state() {
+  local state_name="$1"
+  local version="$2"
+  local build="$3"
+  local previous_version="$4"
+  local unit_name="$5"
+  local state_path=""
+  local temporary_path=""
+
+  prepare_handoffs_root
+  state_path="$(handoff_state_path "$state_name")"
+  [ ! -e "$state_path" ] && [ ! -L "$state_path" ] \
+    || error "Handoff state already exists: $state_name"
+
+  (
+    umask 077
+    temporary_path="$(mktemp "$RUNTIME_ROOT/handoffs/.${state_name}.XXXXXX")"
+    trap 'rm -f -- "$temporary_path"' EXIT
+    {
+      printf 'version=%s\n' "$version"
+      printf 'build=%s\n' "$build"
+      printf 'previous_version=%s\n' "$previous_version"
+      printf 'unit=%s\n' "$unit_name"
+    } > "$temporary_path"
+    mv -Tf -- "$temporary_path" "$state_path"
+    trap - EXIT
+  )
+}
+
+read_handoff_state() {
+  local state_name="$1"
+  local state_path="$(handoff_state_path "$state_name")"
+  local key=""
+  local value=""
+
+  HANDOFF_VERSION=""
+  HANDOFF_BUILD=""
+  HANDOFF_PREVIOUS_VERSION=""
+  HANDOFF_UNIT=""
+  validate_handoff_state_if_present "$state_name"
+  [ -f "$state_path" ] || error "Handoff state not found: $state_name"
+
+  while IFS='=' read -r key value; do
+    case "$key" in
+      version) HANDOFF_VERSION="$value" ;;
+      build) HANDOFF_BUILD="$value" ;;
+      previous_version) HANDOFF_PREVIOUS_VERSION="$value" ;;
+      unit) HANDOFF_UNIT="$value" ;;
+      *) error "Invalid handoff state: $state_name" ;;
+    esac
+  done < "$state_path"
+
+  require_safe_version "$HANDOFF_VERSION"
+  require_safe_version "$HANDOFF_PREVIOUS_VERSION"
+  [[ "$HANDOFF_BUILD" =~ ^[0-9]+$ ]] \
+    || error "Invalid handoff build: $HANDOFF_BUILD"
+  [ "$HANDOFF_UNIT" = "linex-handoff-$HANDOFF_VERSION" ] \
+    || error "Invalid handoff unit: $HANDOFF_UNIT"
+}
+
+remove_handoff_state() {
+  local state_name="$1"
+  local state_path="$(handoff_state_path "$state_name")"
+
+  validate_handoff_state_if_present "$state_name"
+  [ -f "$state_path" ] || return 0
+  rm -f -- "$state_path"
+}
+
+active_runtime_version() {
+  local active_dir="$RUNTIME_ROOT/codex-app"
+  local active_version=""
+
+  [ -d "$active_dir" ] || error "Active runtime not found: $active_dir"
+  active_version="$(read_metadata "$active_dir" app-version)"
+  require_safe_version "$active_version"
+  printf '%s\n' "$active_version"
 }
 
 prepare_releases_root() {
@@ -349,6 +497,26 @@ ensure_not_running() {
     1) return 0 ;;
     *) error "The process check failed with exit code $process_status" ;;
   esac
+}
+
+submit_handoff_unit() {
+  local version="$1"
+  local unit_name="linex-handoff-$version"
+  local submit_command="${LINEX_HANDOFF_SUBMIT_COMMAND:-}"
+
+  if [ -n "$submit_command" ]; then
+    "$submit_command" "$unit_name" "$version"
+    return
+  fi
+
+  [ -x "$HANDOFF_RUNNER" ] || error "Handoff runner is not executable: $HANDOFF_RUNNER"
+  systemd-run --user --collect --unit="$unit_name" --property=KillMode=process \
+    "--setenv=LINEX_INSTALL_ROOT=$INSTALL_ROOT" \
+    "--setenv=DISPLAY=${DISPLAY:-}" \
+    "--setenv=XAUTHORITY=${XAUTHORITY:-}" \
+    "--setenv=XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}" \
+    "--setenv=DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-}" \
+    "$HANDOFF_RUNNER" --run "$version"
 }
 
 switch_active_release() {
@@ -449,8 +617,9 @@ command_approve() {
   printf 'Approved candidate: %s (build %s)\n' "$APPCAST_VERSION" "$APPCAST_BUILD"
 }
 
-command_promote() {
+complete_promotion() {
   local version="$1"
+  local expected_build="$2"
   local candidate_dir="$RUNTIME_ROOT/candidates/$version/codex-app"
   local approval_marker="$RUNTIME_ROOT/approvals/$version.approved"
   local releases_root="$RUNTIME_ROOT/releases"
@@ -470,10 +639,12 @@ command_promote() {
   [ -f "$approval_marker" ] && [ ! -L "$approval_marker" ] \
     || error "Unsafe approval marker: $approval_marker"
 
-  validate_candidate "$version"
-  grep -Fxq "version=$APPCAST_VERSION" "$approval_marker" \
+  validate_candidate_from_handoff "$version" "$expected_build"
+  APPCAST_VERSION="$version"
+  APPCAST_BUILD="$expected_build"
+  grep -Fxq "version=$version" "$approval_marker" \
     || error "Approval marker version mismatch: $version"
-  grep -Fxq "build=$APPCAST_BUILD" "$approval_marker" \
+  grep -Fxq "build=$expected_build" "$approval_marker" \
     || error "Approval marker build mismatch: $version"
 
   validate_releases_root_if_present
@@ -509,6 +680,85 @@ command_promote() {
   switch_active_release "$version"
 
   printf 'Promoted release: %s (build %s)\n' "$APPCAST_VERSION" "$APPCAST_BUILD"
+}
+
+command_promote() {
+  local version="$1"
+  local active_version=""
+  local unit_name=""
+  local pending_path=""
+  local running_path=""
+  local release_parent="$RUNTIME_ROOT/releases/$version"
+
+  require_safe_version "$version"
+  validate_candidate "$version"
+  validate_approvals_root_if_present
+  [ "$SAFE_SUBDIR_PRESENT" = "yes" ] \
+    && [ -f "$RUNTIME_ROOT/approvals/$version.approved" ] \
+    && [ ! -L "$RUNTIME_ROOT/approvals/$version.approved" ] \
+    || error "Approve the candidate first: $version"
+  grep -Fxq "version=$APPCAST_VERSION" "$RUNTIME_ROOT/approvals/$version.approved" \
+    || error "Approval marker version mismatch: $version"
+  grep -Fxq "build=$APPCAST_BUILD" "$RUNTIME_ROOT/approvals/$version.approved" \
+    || error "Approval marker build mismatch: $version"
+
+  validate_releases_root_if_present
+  [ ! -e "$release_parent" ] && [ ! -L "$release_parent" ] \
+    || error "Release already exists: $version"
+  active_version="$(active_runtime_version)"
+  [ "$active_version" != "$version" ] \
+    || error "Active and candidate versions are both $version"
+  unit_name="linex-handoff-$version"
+  prepare_handoffs_root
+  pending_path="$(handoff_state_path pending)"
+  running_path="$(handoff_state_path running)"
+  [ ! -e "$pending_path" ] && [ ! -L "$pending_path" ] \
+    && [ ! -e "$running_path" ] && [ ! -L "$running_path" ] \
+    || error "A handoff is already pending or running"
+
+  write_handoff_state pending "$version" "$APPCAST_BUILD" "$active_version" "$unit_name"
+  if ! submit_handoff_unit "$version"; then
+    remove_handoff_state pending
+    error "Could not queue handoff: $version"
+  fi
+
+  printf 'Queued handoff: %s (build %s)\n' "$APPCAST_VERSION" "$APPCAST_BUILD"
+}
+
+command_handoff_status() {
+  local pending_path="$(handoff_state_path pending)"
+  local running_path="$(handoff_state_path running)"
+  local result_path="$(handoff_state_path result)"
+
+  validate_handoff_state_if_present pending
+  if [ -f "$pending_path" ]; then
+    read_handoff_state pending
+    printf 'Pending handoff: %s (build %s)\n' "$HANDOFF_VERSION" "$HANDOFF_BUILD"
+    return
+  fi
+  validate_handoff_state_if_present running
+  if [ -f "$running_path" ]; then
+    read_handoff_state running
+    printf 'Running handoff: %s (build %s)\n' "$HANDOFF_VERSION" "$HANDOFF_BUILD"
+    return
+  fi
+  validate_handoff_state_if_present result
+  if [ -f "$result_path" ]; then
+    printf 'Last handoff:\n'
+    cat "$result_path"
+    return
+  fi
+  printf 'No handoff is queued or recorded.\n'
+}
+
+command_handoff_cancel() {
+  local pending_path="$(handoff_state_path pending)"
+
+  validate_handoff_state_if_present pending
+  [ -f "$pending_path" ] || error "No pending handoff to cancel"
+  read_handoff_state pending
+  remove_handoff_state pending
+  printf 'Canceled handoff: %s\n' "$HANDOFF_VERSION"
 }
 
 command_rollback() {
@@ -553,6 +803,18 @@ main() {
       require_argument_count 1 promote "$@"
       command_promote "$1"
       ;;
+    handoff-status)
+      require_argument_count 0 handoff-status "$@"
+      command_handoff_status
+      ;;
+    handoff-cancel)
+      require_argument_count 0 handoff-cancel "$@"
+      command_handoff_cancel
+      ;;
+    _complete-handoff)
+      require_argument_count 2 _complete-handoff "$@"
+      complete_promotion "$1" "$2"
+      ;;
     rollback)
       require_argument_count 1 rollback "$@"
       command_rollback "$1"
@@ -567,4 +829,6 @@ main() {
   esac
 }
 
-main "$@"
+if [ "${LINEX_RELEASE_LIBRARY:-0}" != "1" ]; then
+  main "$@"
+fi

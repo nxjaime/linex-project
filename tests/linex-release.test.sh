@@ -17,6 +17,7 @@ FAKE_ACCEPTANCE="$TEST_ROOT/fake acceptance.sh"
 NOT_RUNNING="$TEST_ROOT/not running.sh"
 RUNNING="$TEST_ROOT/running process.sh"
 PROCESS_ERROR="$TEST_ROOT/process error.sh"
+FAKE_HANDOFF_SUBMIT="$TEST_ROOT/fake handoff submit.sh"
 FAKE_BIN="$TEST_ROOT/fake bin"
 output=""
 
@@ -81,6 +82,7 @@ run() {
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
       "$CONTROLLER" "$@" 2>&1
   )"; then
     fail "command failed: $*"$'\n'"$output"
@@ -98,6 +100,7 @@ run_with_process_check() {
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$process_check" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
       "$CONTROLLER" "$@" 2>&1
   )"; then
     fail "command failed: $*"$'\n'"$output"
@@ -112,6 +115,7 @@ run_expect_failure() {
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
       "$CONTROLLER" "$@" 2>&1
   )"; then
     fail "command unexpectedly succeeded: $*"
@@ -129,6 +133,7 @@ run_expect_failure_with_process_check() {
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$process_check" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
       "$CONTROLLER" "$@" 2>&1
   )"; then
     fail "command unexpectedly succeeded: $*"
@@ -146,6 +151,7 @@ run_expect_failure_with_port() {
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
       "$CONTROLLER" "$@" 2>&1
   )"; then
     fail "command unexpectedly succeeded: $*"
@@ -163,6 +169,7 @@ run_expect_failure_for_root() {
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
       "$CONTROLLER" "$@" 2>&1
   )"; then
     fail "command unexpectedly succeeded for $install_root: $*"
@@ -359,6 +366,11 @@ cat > "$PROCESS_ERROR" <<'SH'
 exit 7
 SH
 
+cat > "$FAKE_HANDOFF_SUBMIT" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+
 cat > "$FAKE_BIN/pgrep" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -369,7 +381,7 @@ set -Eeuo pipefail
 SH
 
 chmod +x "$FAKE_PORT" "$FAILING_PORT" "$FAKE_SMOKE" "$FAKE_ACCEPTANCE" \
-  "$NOT_RUNNING" "$RUNNING" "$PROCESS_ERROR" "$FAKE_BIN/pgrep"
+  "$NOT_RUNNING" "$RUNNING" "$PROCESS_ERROR" "$FAKE_HANDOFF_SUBMIT" "$FAKE_BIN/pgrep"
 
 python3 "$APPCAST_HEADER_SERVER" "$APPCAST_HEADER_LOG" "$APPCAST" > "$APPCAST_HEADER_PORT" &
 APPCAST_HEADER_PID=$!
@@ -458,6 +470,8 @@ assert_contains "$output" 'Approve the candidate first'
 run approve 26.721.81911
 
 run promote 26.721.81911
+run _complete-handoff 26.721.81911 5973
+run handoff-cancel
 assert_path_is_symlink "$LIVE_ROOT/runtime/codex-app"
 assert_link_target \
   "$LIVE_ROOT/runtime/codex-app" \
@@ -476,11 +490,12 @@ run build-candidate 26.721.70000
 run approve 26.721.70000
 safe_target="$(readlink -f "$LIVE_ROOT/runtime/codex-app")"
 
-run_expect_failure_with_process_check "$RUNNING" promote 26.721.70000
-assert_contains "$output" 'desktop app is running'
+run_with_process_check "$RUNNING" promote 26.721.70000
+assert_contains "$output" 'Queued handoff: 26.721.70000'
 [ "$(readlink -f "$LIVE_ROOT/runtime/codex-app")" = "$safe_target" ] \
   || fail 'running-process promotion changed the live symlink'
 assert_path_is_dir "$LIVE_ROOT/runtime/candidates/26.721.70000/codex-app"
+run handoff-cancel
 
 run_expect_failure_with_process_check "$RUNNING" rollback 26.721.81911
 assert_contains "$output" 'desktop app is running'
