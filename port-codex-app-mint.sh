@@ -15,9 +15,9 @@ INSTALL_DIR="${CODEX_PORT_INSTALL_DIR:-$OUTPUT_ROOT/codex-app}"
 CACHE_DIR="${CODEX_PORT_CACHE_DIR:-$OUTPUT_ROOT/cache}"
 WORK_DIR="$(mktemp -d)"
 
-DEFAULT_DMG_PATH="$CACHE_DIR/Codex.dmg"
-DMG_PATH=""
-DMG_URL="${CODEX_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}"
+DEFAULT_SOURCE_PATH="$CACHE_DIR/Codex.dmg"
+SOURCE_ARCHIVE="${CODEX_PORT_SOURCE_ARCHIVE:-}"
+SOURCE_URL="${CODEX_PORT_SOURCE_URL:-${CODEX_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}}"
 ELECTRON_VERSION="${CODEX_ELECTRON_VERSION:-40.0.0}"
 DESKTOP_FILE_PATH="${CODEX_DESKTOP_FILE_PATH:-$HOME/.local/share/applications/codex-desktop.desktop}"
 
@@ -58,14 +58,17 @@ Create a temporary Linux Mint-compatible local port of Codex App in ./runtime/.
 No updater, no system-wide package installation for the app itself.
 
 Options:
-  --dmg PATH                 Use an existing Codex.dmg instead of downloading it.
+  --archive PATH             Use an existing upstream .dmg or .zip archive instead of downloading it.
+  --dmg PATH                 Compatibility alias for --archive PATH.
   --fresh                    Remove the generated runtime and cached downloads first.
   --skip-desktop-entry       Do not install or refresh ~/.local/share/applications/codex-desktop.desktop.
   -h, --help                 Show this help and exit.
 
 Environment variables:
   CODEX_ELECTRON_VERSION     Override the Electron runtime version (default: 40.0.0).
-  CODEX_DMG_URL              Override the upstream DMG URL.
+  CODEX_PORT_SOURCE_URL      Override the upstream .dmg or .zip URL.
+  CODEX_PORT_SOURCE_ARCHIVE  Use an existing upstream .dmg or .zip archive.
+  CODEX_DMG_URL              Compatibility alias for the upstream DMG URL.
   CODEX_PORT_OUTPUT_ROOT     Override the runtime output root (default: ./runtime).
   CODEX_PORT_INSTALL_DIR     Override the app install directory (default: ./runtime/codex-app).
   CODEX_PORT_CACHE_DIR       Override the cache directory (default: ./runtime/cache).
@@ -88,9 +91,14 @@ EOF
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --archive)
+        [ "$#" -ge 2 ] || error "--archive requires a path"
+        SOURCE_ARCHIVE="$2"
+        shift
+        ;;
       --dmg)
         [ "$#" -ge 2 ] || error "--dmg requires a path"
-        DMG_PATH="$2"
+        SOURCE_ARCHIVE="$2"
         shift
         ;;
       --fresh)
@@ -117,7 +125,7 @@ prepare_dirs() {
   if [ "$FRESH_INSTALL" -eq 1 ]; then
     info "Removing previous runtime directory: $INSTALL_DIR"
     rm -rf "$INSTALL_DIR"
-    rm -f "$DEFAULT_DMG_PATH"
+    rm -f "$CACHE_DIR/Codex.dmg" "$CACHE_DIR/Codex.zip"
   fi
 }
 
@@ -131,13 +139,17 @@ check_deps() {
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
 
-  if command -v 7zz >/dev/null 2>&1; then
-    SEVEN_ZIP_CMD="7zz"
-  elif command -v 7z >/dev/null 2>&1; then
-    SEVEN_ZIP_CMD="7z"
-  else
-    missing+=("7z")
-  fi
+  case "${SOURCE_ARCHIVE:-$SOURCE_URL}" in
+    *.dmg)
+      if command -v 7zz >/dev/null 2>&1; then
+        SEVEN_ZIP_CMD="7zz"
+      elif command -v 7z >/dev/null 2>&1; then
+        SEVEN_ZIP_CMD="7z"
+      else
+        missing+=("7z")
+      fi
+      ;;
+  esac
 
   if [ "${#missing[@]}" -gt 0 ]; then
     error "Missing dependencies: ${missing[*]}
@@ -149,50 +161,64 @@ $(dependency_help)"
     error "Node.js 20+ is required (found $(node -v))"
   fi
 
-  if "$SEVEN_ZIP_CMD" | head -n 1 | grep -q "16.02"; then
+  if [ -n "$SEVEN_ZIP_CMD" ] && "$SEVEN_ZIP_CMD" | head -n 1 | grep -q "16.02"; then
     error "Your 7-zip build is too old to reliably open modern APFS DMGs. Install a newer 7zz binary."
   fi
 }
 
-resolve_dmg_path() {
-  if [ -n "$DMG_PATH" ]; then
-    [ -f "$DMG_PATH" ] || error "Provided DMG not found: $DMG_PATH"
-    DMG_PATH="$(realpath "$DMG_PATH")"
-    info "Using provided DMG: $DMG_PATH"
+resolve_source_archive() {
+  local source_url_path=""
+
+  if [ -n "$SOURCE_ARCHIVE" ]; then
+    [ -f "$SOURCE_ARCHIVE" ] || error "Provided upstream archive not found: $SOURCE_ARCHIVE"
+    SOURCE_ARCHIVE="$(realpath "$SOURCE_ARCHIVE")"
+    info "Using provided upstream archive: $SOURCE_ARCHIVE"
     return
   fi
 
-  DMG_PATH="$DEFAULT_DMG_PATH"
-  if [ -s "$DMG_PATH" ]; then
-    info "Using cached DMG: $DMG_PATH"
+  source_url_path="${SOURCE_URL%%\?*}"
+  source_url_path="${source_url_path%%\#*}"
+  case "$source_url_path" in
+    *.zip) SOURCE_ARCHIVE="$CACHE_DIR/Codex.zip" ;;
+    *.dmg) SOURCE_ARCHIVE="$DEFAULT_SOURCE_PATH" ;;
+    *) error "Unsupported upstream archive URL: $SOURCE_URL" ;;
+  esac
+
+  if [ -s "$SOURCE_ARCHIVE" ]; then
+    info "Using cached upstream archive: $SOURCE_ARCHIVE"
     return
   fi
 
-  info "Downloading Codex App DMG from official OpenAI CDN"
-  curl -L --progress-bar --connect-timeout 30 --max-time 900 -o "$DMG_PATH" "$DMG_URL"
+  info "Downloading Codex App archive from official OpenAI CDN"
+  curl -L --progress-bar --connect-timeout 30 --max-time 900 -o "$SOURCE_ARCHIVE" "$SOURCE_URL"
 
-  [ -s "$DMG_PATH" ] || error "Download failed or produced an empty file: $DMG_PATH"
+  [ -s "$SOURCE_ARCHIVE" ] || error "Download failed or produced an empty file: $SOURCE_ARCHIVE"
 }
 
-extract_dmg() {
-  local extract_dir="$WORK_DIR/dmg-extracted"
+extract_app_bundle() {
+  local extract_dir="$WORK_DIR/source-extracted"
   local seven_zip_log="$WORK_DIR/7z.log"
   local seven_zip_status=0
   local app_dir=""
 
   mkdir -p "$extract_dir"
 
-  if "$SEVEN_ZIP_CMD" x -y -snl "$DMG_PATH" -o"$extract_dir" >"$seven_zip_log" 2>&1; then
-    :
-  else
-    seven_zip_status=$?
-  fi
+  case "$SOURCE_ARCHIVE" in
+    *.zip)
+      unzip -q "$SOURCE_ARCHIVE" -d "$extract_dir"
+      ;;
+    *.dmg)
+      if "$SEVEN_ZIP_CMD" x -y -snl "$SOURCE_ARCHIVE" -o"$extract_dir" >"$seven_zip_log" 2>&1; then
+        :
+      else
+        seven_zip_status=$?
+      fi
+      ;;
+    *) error "Unsupported upstream archive: $SOURCE_ARCHIVE" ;;
+  esac
 
-  app_dir="$(find "$extract_dir" -maxdepth 4 -name '*.app' -type d | head -n 1 || true)"
-  [ -n "$app_dir" ] || {
-    cat "$seven_zip_log" >&2
-    error "Could not find a .app bundle after extracting the DMG"
-  }
+  app_dir="$(find "$extract_dir" -maxdepth 5 -name '*.app' -type d | head -n 1 || true)"
+  [ -n "$app_dir" ] || error "Could not find a .app bundle after extracting the upstream archive"
 
   if [ "$seven_zip_status" -ne 0 ]; then
     warn "7z returned exit code $seven_zip_status but the app bundle was found. Continuing."
@@ -537,9 +563,9 @@ main() {
   parse_args "$@"
   check_deps
   prepare_dirs
-  resolve_dmg_path
+  resolve_source_archive
 
-  extracted_app_dir="$(extract_dmg)"
+  extracted_app_dir="$(extract_app_bundle)"
   patch_asar "$extracted_app_dir"
   download_electron_runtime
   install_app_files "$extracted_app_dir"
