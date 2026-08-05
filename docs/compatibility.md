@@ -2,6 +2,7 @@
 
 | Upstream app version | Internal build | Linux Mint status | Verified on | Notes |
 | --- | ---: | --- | --- | --- |
+| 26.730.61639 | 6234 | Verified locally | 2026-08-05 | Owner-approved protected handoff; automated Linux smoke test passed and the replacement remained healthy through the 45-second rollback window. The known X11 synthetic-click test limitation remains unchanged. |
 | 26.727.51351 | 6119 | Verified locally | 2026-08-01 | Human-approved remote handoff; stable runtime promoted with automatic rollback health check. |
 | 26.721.41059 | 5848 | Verified locally | 2026-07-29 | Current local runtime baseline. |
 
