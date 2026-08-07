@@ -109,7 +109,21 @@ it does not replace the live runtime. Before `approve`, launch that candidate's
 2. Sign-in and existing conversations remain available.
 3. A local project opens and a safe read-only task runs.
 4. Git/diff and terminal views open.
-5. The browser and computer-use smoke tests passed during the candidate build.
+5. The browser bridge contract, Linux automation smoke test, Computer Use
+   acceptance test, and browser surface report pass during the candidate build.
+6. The in-app browser can be opened and inspected read-only.
+7. If external Chrome is connected, its extension can be selected and inspected
+   read-only. If it is not connected, record it as not available rather than
+   claiming it was verified.
+8. Firefox is verified through X11 Computer Use; there is no separate Firefox
+   browser connector. The release record names this surface as “Firefox through
+   X11 Computer Use.”
+   Surface label: Firefox through X11 Computer Use.
+
+The human approval gate is still required after these automated checks. The
+candidate release controller runs the browser bridge and browser surface checks
+with the candidate's own runtime path, then writes a local ignored status file.
+The checks never inspect cookies, passwords, browser profiles, or personal data.
 
 `approve` records this human decision locally, but does not change the live
 installation. `promote` requires approval and queues a local handoff; it does
