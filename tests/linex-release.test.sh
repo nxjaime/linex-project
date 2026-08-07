@@ -714,6 +714,11 @@ grep -Fxq 'version=26.721.81911' \
 assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh build-candidate'
 assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh approve'
 assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh promote'
+assert_file_contains "$LAB_ROOT/README.md" 'browser bridge'
+assert_file_contains "$LAB_ROOT/README.md" 'external Chrome'
+assert_file_contains "$LAB_ROOT/README.md" 'Firefox through X11 Computer Use'
+assert_file_contains "$LAB_ROOT/README.md" 'human approval'
 assert_file_contains "$LAB_ROOT/docs/compatibility.md" 'mint-app-<upstream-version>'
+assert_file_contains "$LAB_ROOT/docs/compatibility.md" 'browser surfaces'
 
 printf 'Linex release controller tests passed.\n'
