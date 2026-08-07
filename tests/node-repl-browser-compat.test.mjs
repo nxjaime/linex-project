@@ -7,12 +7,16 @@ const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const runtimeDir = process.env.CODEX_APP_RUNTIME_DIR
   ? path.resolve(process.env.CODEX_APP_RUNTIME_DIR)
   : path.join(projectDir, "runtime", "codex-app");
-const nodeRepl = path.join(runtimeDir, "resources", "cua_node", "bin", "node_repl");
+const nodeRepl = process.env.CODEX_NODE_REPL_COMMAND
+  ? process.env.CODEX_NODE_REPL_COMMAND
+  : path.join(runtimeDir, "resources", "cua_node", "bin", "node_repl");
 const browserClient = path.join(runtimeDir, "resources", "plugins", "openai-bundled", "plugins", "browser", "scripts", "browser-client.mjs");
 
 class McpClient {
   constructor(command, env = process.env) {
-    this.child = spawn(command, [], { env, stdio: ["pipe", "pipe", "inherit"] });
+    const commandArgs = command.endsWith(".mjs") ? [command] : [];
+    const executable = command.endsWith(".mjs") ? process.execPath : command;
+    this.child = spawn(executable, commandArgs, { env, stdio: ["pipe", "pipe", "inherit"] });
     this.buffer = "";
     this.nextId = 1;
     this.pending = new Map();

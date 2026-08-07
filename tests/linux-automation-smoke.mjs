@@ -10,7 +10,9 @@ const runtimeDir = process.env.CODEX_APP_RUNTIME_DIR
 
 class McpClient {
   constructor(command, env = process.env) {
-    this.child = spawn(command, [], { env, stdio: ["pipe", "pipe", "inherit"] });
+    const commandArgs = command.endsWith(".mjs") ? [command] : [];
+    const executable = command.endsWith(".mjs") ? process.execPath : command;
+    this.child = spawn(executable, commandArgs, { env, stdio: ["pipe", "pipe", "inherit"] });
     this.buffer = "";
     this.nextId = 1;
     this.pending = new Map();
@@ -42,7 +44,10 @@ class McpClient {
 }
 
 async function testNodeRepl() {
-  const client = new McpClient(path.join(runtimeDir, "resources", "cua_node", "bin", "node_repl"));
+  const nodeRepl = process.env.CODEX_NODE_REPL_COMMAND
+    ? process.env.CODEX_NODE_REPL_COMMAND
+    : path.join(runtimeDir, "resources", "cua_node", "bin", "node_repl");
+  const client = new McpClient(nodeRepl);
   try {
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
     assert.equal(initialized.result.serverInfo.name, "node_repl");
