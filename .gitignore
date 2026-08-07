@@ -9,3 +9,5 @@ runtime-update/
 *.log
 __pycache__/
 *.pyc
+linex-automated-status
+browser-surface-report.json

@@ -458,6 +458,41 @@ run_smoke_test() {
   fi
 }
 
+run_browser_bridge_test() {
+  local candidate_dir="$1"
+
+  if [ -n "${LINEX_BROWSER_BRIDGE_TEST_COMMAND:-}" ]; then
+    CODEX_APP_RUNTIME_DIR="$candidate_dir" "$LINEX_BROWSER_BRIDGE_TEST_COMMAND"
+  else
+    CODEX_APP_RUNTIME_DIR="$candidate_dir" \
+      node "$LAB_ROOT/tests/node-repl-browser-compat.test.mjs"
+  fi
+}
+
+run_browser_surface_test() {
+  local candidate_dir="$1"
+
+  if [ -n "${LINEX_BROWSER_SURFACE_TEST_COMMAND:-}" ]; then
+    CODEX_APP_RUNTIME_DIR="$candidate_dir" "$LINEX_BROWSER_SURFACE_TEST_COMMAND"
+  else
+    CODEX_APP_RUNTIME_DIR="$candidate_dir" \
+      node "$LAB_ROOT/tests/browser-surface-acceptance.mjs"
+  fi
+}
+
+write_candidate_test_report() {
+  local candidate_dir="$1"
+  local report_path="$candidate_dir/linex-automated-status"
+
+  {
+    printf 'completed_at=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    printf 'browser_bridge=passed\n'
+    printf 'linux_smoke=passed\n'
+    printf 'computer_use=passed\n'
+    printf 'browser_surface=passed\n'
+  } > "$report_path"
+}
+
 run_acceptance_test() {
   local candidate_dir="$1"
 
@@ -581,8 +616,11 @@ command_build_candidate() {
     "$PORT_COMMAND" --fresh --skip-desktop-entry
 
   validate_candidate "$APPCAST_VERSION"
+  run_browser_bridge_test "$candidate_dir"
   run_smoke_test "$candidate_dir"
   run_acceptance_test "$candidate_dir"
+  run_browser_surface_test "$candidate_dir"
+  write_candidate_test_report "$candidate_dir"
 
   printf 'Candidate ready: %s (build %s)\n' "$APPCAST_VERSION" "$APPCAST_BUILD"
 }
