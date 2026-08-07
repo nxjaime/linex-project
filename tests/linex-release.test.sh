@@ -14,12 +14,17 @@ FAKE_PORT="$TEST_ROOT/fake port.sh"
 FAILING_PORT="$TEST_ROOT/failing port.sh"
 FAKE_SMOKE="$TEST_ROOT/fake smoke.sh"
 FAKE_ACCEPTANCE="$TEST_ROOT/fake acceptance.sh"
+FAKE_BROWSER_BRIDGE="$TEST_ROOT/fake browser bridge.sh"
+FAKE_BROWSER_SURFACE="$TEST_ROOT/fake browser surface.sh"
 NOT_RUNNING="$TEST_ROOT/not running.sh"
 RUNNING="$TEST_ROOT/running process.sh"
 PROCESS_ERROR="$TEST_ROOT/process error.sh"
 FAKE_HANDOFF_SUBMIT="$TEST_ROOT/fake handoff submit.sh"
 FAKE_BIN="$TEST_ROOT/fake bin"
 output=""
+
+export LINEX_BROWSER_BRIDGE_TEST_COMMAND="$FAKE_BROWSER_BRIDGE"
+export LINEX_BROWSER_SURFACE_TEST_COMMAND="$FAKE_BROWSER_SURFACE"
 
 cleanup() {
   if [ -n "$APPCAST_HEADER_PID" ]; then
@@ -351,6 +356,30 @@ esac
 printf '%s\n' 'acceptance-passed' > "$CODEX_APP_RUNTIME_DIR/acceptance-result"
 SH
 
+cat > "$FAKE_BROWSER_BRIDGE" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+case "$CODEX_APP_RUNTIME_DIR" in
+  */runtime/candidates/*/codex-app) ;;
+  *) exit 45 ;;
+esac
+[ -f "$CODEX_APP_RUNTIME_DIR/acceptance-result" ]
+printf '%s\n' 'browser-bridge-passed' > "$CODEX_APP_RUNTIME_DIR/browser-bridge-result"
+SH
+
+cat > "$FAKE_BROWSER_SURFACE" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+case "$CODEX_APP_RUNTIME_DIR" in
+  */runtime/candidates/*/codex-app) ;;
+  *) exit 46 ;;
+esac
+[ -f "$CODEX_APP_RUNTIME_DIR/browser-bridge-result" ]
+printf '%s\n' 'iab=automated_verified chrome=not_available firefox=computer_use' > "$CODEX_APP_RUNTIME_DIR/browser-surface-result"
+SH
+
 cat > "$NOT_RUNNING" <<'SH'
 #!/usr/bin/env bash
 exit 1
@@ -381,6 +410,7 @@ set -Eeuo pipefail
 SH
 
 chmod +x "$FAKE_PORT" "$FAILING_PORT" "$FAKE_SMOKE" "$FAKE_ACCEPTANCE" \
+  "$FAKE_BROWSER_BRIDGE" "$FAKE_BROWSER_SURFACE" \
   "$NOT_RUNNING" "$RUNNING" "$PROCESS_ERROR" "$FAKE_HANDOFF_SUBMIT" "$FAKE_BIN/pgrep"
 
 python3 "$APPCAST_HEADER_SERVER" "$APPCAST_HEADER_LOG" "$APPCAST" > "$APPCAST_HEADER_PORT" &
@@ -445,6 +475,10 @@ assert_path_is_dir "$LIVE_ROOT/runtime/codex-app"
   || fail 'smoke command did not target the candidate'
 [ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/acceptance-result" ] \
   || fail 'acceptance command did not target the candidate'
+[ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/browser-bridge-result" ] \
+  || fail 'browser bridge command did not target the candidate'
+[ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/browser-surface-result" ] \
+  || fail 'browser surface command did not target the candidate'
 
 run_expect_failure promote 26.721.81911
 assert_contains "$output" 'Approve the candidate first'
