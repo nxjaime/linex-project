@@ -64,6 +64,14 @@ async function testNodeRepl() {
     });
     assert.equal(compatibility.result.content[0].text, "accept");
     assert.equal(compatibility.result._meta.smoke, true);
+    const bridgeCapabilities = await client.request("tools/call", {
+      name: "js",
+      arguments: {
+        code:
+          "JSON.stringify({ hook: typeof nodeRepl.addAfterSubmittedCodeHook, content: typeof nodeRepl.emitContentItem, image: typeof nodeRepl.emitImage })",
+      },
+    });
+    assert.equal(bridgeCapabilities.result.content[0].text, '{"hook":"function","content":"function","image":"function"}');
   } finally {
     client.close();
   }
