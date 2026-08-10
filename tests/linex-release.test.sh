@@ -14,12 +14,18 @@ FAKE_PORT="$TEST_ROOT/fake port.sh"
 FAILING_PORT="$TEST_ROOT/failing port.sh"
 FAKE_SMOKE="$TEST_ROOT/fake smoke.sh"
 FAKE_ACCEPTANCE="$TEST_ROOT/fake acceptance.sh"
+FAKE_BROWSER_BRIDGE="$TEST_ROOT/fake browser bridge.sh"
+FAKE_BROWSER_SURFACE="$TEST_ROOT/fake browser surface.sh"
+FAILING_BROWSER_BRIDGE="$TEST_ROOT/failing browser bridge.sh"
 NOT_RUNNING="$TEST_ROOT/not running.sh"
 RUNNING="$TEST_ROOT/running process.sh"
 PROCESS_ERROR="$TEST_ROOT/process error.sh"
 FAKE_HANDOFF_SUBMIT="$TEST_ROOT/fake handoff submit.sh"
 FAKE_BIN="$TEST_ROOT/fake bin"
 output=""
+
+export LINEX_BROWSER_BRIDGE_TEST_COMMAND="$FAKE_BROWSER_BRIDGE"
+export LINEX_BROWSER_SURFACE_TEST_COMMAND="$FAKE_BROWSER_SURFACE"
 
 cleanup() {
   if [ -n "$APPCAST_HEADER_PID" ]; then
@@ -148,6 +154,26 @@ run_expect_failure_with_port() {
     LINEX_INSTALL_ROOT="$LIVE_ROOT" \
     LINEX_APPCAST_URL="file://$APPCAST" \
     LINEX_PORT_COMMAND="$port_command" \
+    LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
+    LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
+    LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
+    LINEX_HANDOFF_SUBMIT_COMMAND="$FAKE_HANDOFF_SUBMIT" \
+      "$CONTROLLER" "$@" 2>&1
+  )"; then
+    fail "command unexpectedly succeeded: $*"
+  fi
+}
+
+run_expect_failure_with_browser_bridge() {
+  local browser_bridge_command="$1"
+  shift
+
+  if output="$(
+    LINEX_INSTALL_ROOT="$LIVE_ROOT" \
+    LINEX_APPCAST_URL="file://$APPCAST" \
+    LINEX_PORT_COMMAND="$FAKE_PORT" \
+    LINEX_BROWSER_BRIDGE_TEST_COMMAND="$browser_bridge_command" \
+    LINEX_BROWSER_SURFACE_TEST_COMMAND="$FAKE_BROWSER_SURFACE" \
     LINEX_SMOKE_TEST_COMMAND="$FAKE_SMOKE" \
     LINEX_ACCEPTANCE_TEST_COMMAND="$FAKE_ACCEPTANCE" \
     LINEX_PROCESS_CHECK_COMMAND="$NOT_RUNNING" \
@@ -351,6 +377,35 @@ esac
 printf '%s\n' 'acceptance-passed' > "$CODEX_APP_RUNTIME_DIR/acceptance-result"
 SH
 
+cat > "$FAKE_BROWSER_BRIDGE" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+case "$CODEX_APP_RUNTIME_DIR" in
+  */runtime/candidates/*/codex-app) ;;
+  *) exit 45 ;;
+esac
+printf '%s\n' 'browser-bridge-passed' > "$CODEX_APP_RUNTIME_DIR/browser-bridge-result"
+SH
+
+cat > "$FAKE_BROWSER_SURFACE" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+case "$CODEX_APP_RUNTIME_DIR" in
+  */runtime/candidates/*/codex-app) ;;
+  *) exit 46 ;;
+esac
+[ -f "$CODEX_APP_RUNTIME_DIR/browser-bridge-result" ]
+printf '%s\n' 'iab=automated_verified chrome=not_available firefox=computer_use' > "$CODEX_APP_RUNTIME_DIR/browser-surface-result"
+SH
+
+cat > "$FAILING_BROWSER_BRIDGE" <<'SH'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+exit 47
+SH
+
 cat > "$NOT_RUNNING" <<'SH'
 #!/usr/bin/env bash
 exit 1
@@ -381,6 +436,7 @@ set -Eeuo pipefail
 SH
 
 chmod +x "$FAKE_PORT" "$FAILING_PORT" "$FAKE_SMOKE" "$FAKE_ACCEPTANCE" \
+  "$FAKE_BROWSER_BRIDGE" "$FAKE_BROWSER_SURFACE" "$FAILING_BROWSER_BRIDGE" \
   "$NOT_RUNNING" "$RUNNING" "$PROCESS_ERROR" "$FAKE_HANDOFF_SUBMIT" "$FAKE_BIN/pgrep"
 
 python3 "$APPCAST_HEADER_SERVER" "$APPCAST_HEADER_LOG" "$APPCAST" > "$APPCAST_HEADER_PORT" &
@@ -445,6 +501,19 @@ assert_path_is_dir "$LIVE_ROOT/runtime/codex-app"
   || fail 'smoke command did not target the candidate'
 [ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/acceptance-result" ] \
   || fail 'acceptance command did not target the candidate'
+[ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/browser-bridge-result" ] \
+  || fail 'browser bridge command did not target the candidate'
+[ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/browser-surface-result" ] \
+  || fail 'browser surface command did not target the candidate'
+[ -f "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/linex-automated-status" ] \
+  || fail 'automated candidate status was not written'
+assert_file_contains "$LIVE_ROOT/runtime/candidates/26.721.81911/codex-app/linex-automated-status" 'browser_bridge=passed'
+
+safe_live_target="$(readlink -f "$LIVE_ROOT/runtime/codex-app")"
+run_expect_failure_with_browser_bridge "$FAILING_BROWSER_BRIDGE" build-candidate 26.721.70000
+assert_path_is_dir "$LIVE_ROOT/runtime/codex-app"
+[ "$(readlink -f "$LIVE_ROOT/runtime/codex-app")" = "$safe_live_target" ] \
+  || fail 'failed browser compatibility changed the live runtime'
 
 run_expect_failure promote 26.721.81911
 assert_contains "$output" 'Approve the candidate first'
@@ -645,6 +714,11 @@ grep -Fxq 'version=26.721.81911' \
 assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh build-candidate'
 assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh approve'
 assert_file_contains "$LAB_ROOT/README.md" './scripts/linex-release.sh promote'
+assert_file_contains "$LAB_ROOT/README.md" 'browser bridge'
+assert_file_contains "$LAB_ROOT/README.md" 'external Chrome'
+assert_file_contains "$LAB_ROOT/README.md" 'Firefox through X11 Computer Use'
+assert_file_contains "$LAB_ROOT/README.md" 'human approval'
 assert_file_contains "$LAB_ROOT/docs/compatibility.md" 'mint-app-<upstream-version>'
+assert_file_contains "$LAB_ROOT/docs/compatibility.md" 'browser surfaces'
 
 printf 'Linex release controller tests passed.\n'

@@ -20,6 +20,21 @@ X.XStringToKeysym.restype = ctypes.c_ulong
 X.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 X.XKeysymToKeycode.restype = ctypes.c_uint
 X.XFlush.argtypes = [ctypes.c_void_p]
+X.XFlush.restype = ctypes.c_int
+X.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+X.XSync.restype = ctypes.c_int
+X.XQueryPointer.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_ulong,
+    ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_ulong),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_uint),
+]
+X.XQueryPointer.restype = ctypes.c_bool
 X.XIconifyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int]
 X.XIconifyWindow.restype = ctypes.c_int
 X.XWarpPointer.argtypes = [
@@ -33,12 +48,14 @@ X.XWarpPointer.argtypes = [
     ctypes.c_int,
     ctypes.c_int,
 ]
+X.XWarpPointer.restype = ctypes.c_int
 Xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_bool, ctypes.c_ulong]
 Xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_bool, ctypes.c_ulong]
 
 
 def flush():
     X.XFlush(display)
+    X.XSync(display, False)
 
 
 def move(x, y):

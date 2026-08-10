@@ -10,7 +10,9 @@ const runtimeDir = process.env.CODEX_APP_RUNTIME_DIR
 
 class McpClient {
   constructor(command, env = process.env) {
-    this.child = spawn(command, [], { env, stdio: ["pipe", "pipe", "inherit"] });
+    const commandArgs = command.endsWith(".mjs") ? [command] : [];
+    const executable = command.endsWith(".mjs") ? process.execPath : command;
+    this.child = spawn(executable, commandArgs, { env, stdio: ["pipe", "pipe", "inherit"] });
     this.buffer = "";
     this.nextId = 1;
     this.pending = new Map();
@@ -42,7 +44,10 @@ class McpClient {
 }
 
 async function testNodeRepl() {
-  const client = new McpClient(path.join(runtimeDir, "resources", "cua_node", "bin", "node_repl"));
+  const nodeRepl = process.env.CODEX_NODE_REPL_COMMAND
+    ? process.env.CODEX_NODE_REPL_COMMAND
+    : path.join(runtimeDir, "resources", "cua_node", "bin", "node_repl");
+  const client = new McpClient(nodeRepl);
   try {
     const initialized = await client.request("initialize", { protocolVersion: "2025-03-26" });
     assert.equal(initialized.result.serverInfo.name, "node_repl");
@@ -64,6 +69,14 @@ async function testNodeRepl() {
     });
     assert.equal(compatibility.result.content[0].text, "accept");
     assert.equal(compatibility.result._meta.smoke, true);
+    const bridgeCapabilities = await client.request("tools/call", {
+      name: "js",
+      arguments: {
+        code:
+          "JSON.stringify({ hook: typeof nodeRepl.addAfterSubmittedCodeHook, content: typeof nodeRepl.emitContentItem, image: typeof nodeRepl.emitImage })",
+      },
+    });
+    assert.equal(bridgeCapabilities.result.content[0].text, '{"hook":"function","content":"function","image":"function"}');
   } finally {
     client.close();
   }

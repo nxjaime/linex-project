@@ -15,6 +15,8 @@ let context;
 
 function createContext() {
   const output = [];
+  const sideEffects = [];
+  const afterSubmittedCodeHooks = [];
   let responseMeta = {};
   const write = (value) => {
     output.push(typeof value === "string" ? value : inspect(value, { depth: 8, colors: false }));
@@ -49,6 +51,29 @@ function createContext() {
     async createElicitation() {
       return { action: "accept" };
     },
+    addAfterSubmittedCodeHook({ timeoutMs = 10_000, run } = {}) {
+      if (typeof run !== "function") {
+        throw new TypeError("nodeRepl.addAfterSubmittedCodeHook requires a run function.");
+      }
+      const hook = {
+        timeoutMs: Math.min(Math.max(Number(timeoutMs) || 10_000, 1), 300_000),
+        run,
+      };
+      afterSubmittedCodeHooks.push(hook);
+      return () => {
+        const index = afterSubmittedCodeHooks.indexOf(hook);
+        if (index >= 0) {
+          afterSubmittedCodeHooks.splice(index, 1);
+        }
+      };
+    },
+    emitContentItem(value) {
+      sideEffects.push(normalizeContentItem(value));
+    },
+    emitImage(value) {
+      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+      sideEffects.push({ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType: "image/png" });
+    },
     env: { ...hostProcess.env },
     tmpDir: os.tmpdir(),
     write,
@@ -59,9 +84,21 @@ function createContext() {
     },
   };
   sandbox.__nodeReplGetResponseMeta = () => responseMeta;
+  sandbox.__nodeReplSideEffects = sideEffects;
+  sandbox.__nodeReplAfterSubmittedCodeHooks = afterSubmittedCodeHooks;
   sandbox.__nodeReplImport = createDynamicImporter();
   sandbox.__nodeReplOutput = output;
   return vm.createContext(sandbox);
+}
+
+function normalizeContentItem(value) {
+  if (typeof value === "string") {
+    return { type: "text", text: value };
+  }
+  if (value && typeof value === "object" && typeof value.type === "string") {
+    return { ...value };
+  }
+  return { type: "text", text: formatValue(value) };
 }
 
 function formatValue(value) {
@@ -137,6 +174,7 @@ async function trustBrowserClient(specifier) {
 
 async function evaluate(code, timeoutMs) {
   context.__nodeReplOutput.length = 0;
+  context.__nodeReplSideEffects.length = 0;
   const source = persistTopLevelDeclarations(code);
   let promise;
 
@@ -153,6 +191,25 @@ async function evaluate(code, timeoutMs) {
     timer.unref();
   });
   const value = await Promise.race([promise, timeout]);
+  for (const hook of [...context.__nodeReplAfterSubmittedCodeHooks]) {
+    try {
+      await Promise.race([
+        Promise.resolve().then(() => hook.run()),
+        new Promise((_, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`after-submission hook timed out after ${hook.timeoutMs} ms`)),
+            hook.timeoutMs,
+          );
+          timer.unref();
+        }),
+      ]);
+    } catch (error) {
+      context.nodeRepl.emitContentItem({
+        type: "text",
+        text: `Browser response hook failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
   const chunks = [...context.__nodeReplOutput];
   if (value !== undefined) {
     chunks.push(formatValue(value));
@@ -163,6 +220,7 @@ async function evaluate(code, timeoutMs) {
       result.length > MAX_OUTPUT_CHARS
         ? `${result.slice(0, MAX_OUTPUT_CHARS)}\n[output truncated]`
         : result,
+    sideEffects: [...context.__nodeReplSideEffects],
     meta: context.__nodeReplGetResponseMeta(),
   };
 }
@@ -224,6 +282,12 @@ startMcpServer({
     }
     const timeoutMs = Math.min(Math.max(Number(args.timeout_ms) || DEFAULT_TIMEOUT_MS, 1), 300_000);
     const evaluation = await evaluate(String(args.code), timeoutMs);
-    return textResult(evaluation.text, { _meta: evaluation.meta });
+    return {
+      content: [
+        ...(evaluation.text ? [{ type: "text", text: evaluation.text }] : []),
+        ...evaluation.sideEffects,
+      ],
+      _meta: evaluation.meta,
+    };
   },
 });

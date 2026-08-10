@@ -33,7 +33,6 @@ const marketplacePath = path.join(
 
 if (fs.existsSync(marketplacePath)) {
   const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf8"));
-  marketplace.plugins = marketplace.plugins.filter((plugin) => plugin.name !== "chrome");
   if (!marketplace.plugins.some((plugin) => plugin.name === "computer-use")) {
     marketplace.plugins.push({
       name: "computer-use",
