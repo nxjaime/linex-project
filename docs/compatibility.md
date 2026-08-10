@@ -2,6 +2,7 @@
 
 | Upstream app version | Internal build | Linux Mint status | Verified on | Notes |
 | --- | ---: | --- | --- | --- |
+| 26.803.61601 | 6396 | Owner-approved protected handoff | 2026-08-10 | Automated browser bridge, Linux smoke, Computer Use, and browser-surface gates passed; replacement relaunched and remained healthy through the 45-second window. In-app Browser live verification remains a post-launch follow-up; external Chrome was not available because its extension was not connected. Firefox was exercised through X11 Computer Use; typing worked for letters but punctuation was dropped in the manual check. |
 | 26.730.61639 | 6234 | Verified locally | 2026-08-05 | Owner-approved protected handoff; automated Linux smoke test passed and the replacement remained healthy through the 45-second rollback window. Browser-surface compatibility was not part of this earlier record. |
 | 26.727.51351 | 6119 | Verified locally | 2026-08-01 | Human-approved remote handoff; stable runtime promoted with automatic rollback health check. |
 | 26.721.41059 | 5848 | Verified locally | 2026-07-29 | Current local runtime baseline. |
