@@ -209,6 +209,32 @@ validate_candidate() {
     || error "Candidate version mismatch: expected $APPCAST_VERSION, found $candidate_version"
   [ "$candidate_build" = "$APPCAST_BUILD" ] \
     || error "Candidate build mismatch: expected $APPCAST_BUILD, found $candidate_build"
+
+  validate_source_fingerprint "$candidate_dir"
+}
+
+validate_source_fingerprint() {
+  local candidate_dir="$1"
+  local fingerprint_path="$candidate_dir/source-fingerprint.json"
+
+  [ ! -e "$fingerprint_path" ] && [ ! -L "$fingerprint_path" ] && return 0
+  [ -f "$fingerprint_path" ] && [ ! -L "$fingerprint_path" ] \
+    || error "Unsafe source fingerprint path: $fingerprint_path"
+
+  python3 - "$fingerprint_path" "$APPCAST_VERSION" "$APPCAST_BUILD" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+if report.get("version") != sys.argv[2]:
+    raise SystemExit(f"Source fingerprint version mismatch: {report.get('version')}")
+if report.get("build") != sys.argv[3]:
+    raise SystemExit(f"Source fingerprint build mismatch: {report.get('build')}")
+if not isinstance(report.get("identity"), str) or len(report["identity"]) != 64:
+    raise SystemExit("Source fingerprint identity is missing or invalid")
+PY
 }
 
 validate_candidate_from_handoff() {
@@ -246,6 +272,9 @@ validate_candidate_from_handoff() {
     || error "Candidate version mismatch: expected $version, found $candidate_version"
   [ "$candidate_build" = "$expected_build" ] \
     || error "Candidate build mismatch: expected $expected_build, found $candidate_build"
+  APPCAST_VERSION="$version"
+  APPCAST_BUILD="$expected_build"
+  validate_source_fingerprint "$candidate_dir"
 }
 
 prepare_candidate_path() {
@@ -483,6 +512,16 @@ run_browser_surface_test() {
 write_candidate_test_report() {
   local candidate_dir="$1"
   local report_path="$candidate_dir/linex-automated-status"
+  local source_identity="not-recorded"
+
+  if [ -f "$candidate_dir/source-fingerprint.json" ]; then
+    source_identity="$(python3 - "$candidate_dir/source-fingerprint.json" <<'PY'
+import json
+import sys
+print(json.loads(open(sys.argv[1], encoding="utf-8").read())["identity"])
+PY
+)"
+  fi
 
   {
     printf 'completed_at=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -490,6 +529,7 @@ write_candidate_test_report() {
     printf 'linux_smoke=passed\n'
     printf 'computer_use=passed\n'
     printf 'browser_surface=passed\n'
+    printf 'source_fingerprint=%s\n' "$source_identity"
   } > "$report_path"
 }
 

@@ -128,6 +128,13 @@ try {
   assert.equal(initial.result.isError, undefined);
   assert.equal(initial.result.content[1].mimeType, "image/png");
 
+  const listed = await client.request("tools/list");
+  assert(listed.result.tools.some((tool) => tool.name === "computer_get_capabilities"));
+  const capabilities = await client.call("computer_get_capabilities");
+  const capabilityReport = JSON.parse(capabilities.result.content[0].text);
+  assert.equal(capabilityReport.session_type, "x11");
+  assert.equal(capabilityReport.control_supported, true);
+
   await client.call("computer_focus_window", { window_id: fixtureWindow.id });
   assert(Number.isFinite(fixtureWindow.clientX));
   assert(Number.isFinite(fixtureWindow.clientY));
@@ -139,10 +146,11 @@ try {
   await client.call("computer_move", { x: pointerX, y: pointerY });
   assert.deepEqual(await readPointer(), { x: pointerX, y: pointerY });
 
-  await client.call("computer_click", {
+  const buttonClick = await client.call("computer_click", {
     x: originX + 155,
     y: originY + 130,
   });
+  assert.equal(buttonClick.result.isError, undefined, buttonClick.result.content?.[0]?.text);
   await waitFor(async () => (await readState()).button_clicks === 1, "Click was not delivered");
 
   await client.call("computer_click", {
@@ -208,9 +216,19 @@ try {
     XDG_SESSION_TYPE: "wayland",
   });
   try {
+    const waylandCapabilities = await wayland.call("computer_get_capabilities");
+    const waylandReport = JSON.parse(waylandCapabilities.result.content[0].text);
+    assert.equal(waylandReport.session_type, "wayland");
+    assert.equal(waylandReport.control_supported, false);
     const waylandResult = await wayland.call("computer_get_state");
-    assert.equal(waylandResult.result.isError, true);
-    assert.match(waylandResult.result.content[0].text, /X11 only/);
+    if (waylandResult.result.isError) {
+      assert.match(waylandResult.result.content[0].text, /Wayland.*screenshot|screenshot.*Wayland/i);
+    } else {
+      assert.equal(waylandResult.result.content[1].mimeType, "image/png");
+      const waylandState = JSON.parse(waylandResult.result.content[0].text);
+      assert.equal(waylandState.session_type, "wayland");
+      assert.equal(waylandState.pointer, null);
+    }
   } finally {
     wayland.close();
   }

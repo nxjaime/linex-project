@@ -42,12 +42,18 @@ try {
   );
   await seedPlugin("browser");
   await seedPlugin("computer-use");
+  await mkdir(path.join(installDir, "resources", "managed-node", "bin"), { recursive: true });
+  await writeFile(path.join(installDir, "resources", "managed-node", "bin", "node"), "fixture");
 
   await execFileAsync(process.execPath, [installScript, installDir, sourceDir]);
   const marketplace = JSON.parse(await readFile(marketplacePath, "utf8"));
   const names = marketplace.plugins.map((plugin) => plugin.name);
   assert(names.includes("browser"));
   assert(names.includes("chrome"));
+  const nodeWrapper = await readFile(path.join(installDir, "resources", "cua_node", "bin", "node"), "utf8");
+  const nodeReplWrapper = await readFile(path.join(installDir, "resources", "cua_node", "bin", "node_repl"), "utf8");
+  assert.match(nodeWrapper, /managed-node\/bin\/node/);
+  assert.match(nodeReplWrapper, /managed-node\/bin\/node/);
   console.log("Linux automation installer Chrome-preservation test passed.");
 } finally {
   await rm(installDir, { recursive: true, force: true });

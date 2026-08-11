@@ -38,12 +38,17 @@ On Linux Mint / Ubuntu:
 sudo apt install curl unzip p7zip-full python3 build-essential
 ```
 
-You also need:
+The build process also needs:
 
 - Node.js 20+
 - `npm`
 - `npx`
 - an installed Codex CLI available in `PATH`, or reachable through `CODEX_CLI_PATH`
+
+The generated runtime bundles a verified Node.js 22.14.0 runtime for Browser and
+Computer Use helpers. System Node/npm remain build-time requirements because
+native Electron modules are rebuilt locally; end users running a generated
+runtime do not need to provide Node just for those helpers.
 
 ## Usage
 
@@ -94,6 +99,29 @@ cd <project-dir>
 ./scripts/linex-release.sh handoff-status
 ./scripts/linex-release.sh rollback 26.721.41059
 ```
+
+Each generated runtime records the upstream archive identity in
+`source-fingerprint.json`. The scheduled GitHub check uses the same metadata
+shape (version, build, archive URL, HTTP identity, and deterministic
+fingerprint) to open one human-verification issue per upstream identity. It
+never installs or promotes a release.
+
+Build a manual Debian package from an already approved or otherwise verified
+runtime:
+
+```bash
+./scripts/build-deb.sh /path/to/runtime/codex-app ./dist/linex-codex.deb
+```
+
+This creates an artifact only. It does not run `sudo`, `pkexec`, or an updater.
+After human verification, install it through the normal Mint package workflow:
+
+```bash
+sudo apt install ./dist/linex-codex.deb
+```
+
+The package installs the runtime under `/opt/linex-codex` and exposes
+`/usr/bin/linex-codex` plus the desktop entry.
 
 Cancel only a pending handoff, before the current app closes:
 
@@ -184,12 +212,19 @@ Desktop control is disabled by default. Start Codex with:
 CODEX_LINUX_COMPUTER_USE=1 ./runtime/codex-app/start.sh
 ```
 
-Desktop control currently targets Linux Mint Cinnamon on X11. It requires an
-active `DISPLAY`, `wmctrl`, `xrandr`, `gnome-screenshot`, Python 3, and the X11
-and XTest shared libraries. Wayland is rejected with a clear error.
+Desktop control currently provides full input support on Linux Mint Cinnamon
+X11. It requires an active `DISPLAY`, `wmctrl`, `xrandr`, `gnome-screenshot`,
+Python 3, and the X11 and XTest shared libraries. The Computer Use server now
+also reports capabilities on Wayland and can return a read-only screenshot when
+`grim` or `gnome-screenshot` is available; Wayland input remains explicitly
+unsupported until a portal/uinput backend is added.
 
 Run the compatibility smoke tests after building:
 
 ```bash
 node tests/linux-automation-smoke.mjs
 ```
+
+When diagnosing a desktop session, call the Computer Use capability surface
+first. It reports the detected session type, available screenshot backends,
+and whether pointer/keyboard control is supported without touching the desktop.

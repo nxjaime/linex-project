@@ -66,6 +66,11 @@ writeExecutable(
   path.join(cuaBinDir, "node"),
   `#!/usr/bin/env bash
 set -Eeuo pipefail
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+MANAGED_NODE="$SCRIPT_DIR/../../managed-node/bin/node"
+if [ -x "$MANAGED_NODE" ]; then
+  exec "$MANAGED_NODE" "$@"
+fi
 PRIMARY_NODE="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
 if [ -x "$PRIMARY_NODE" ]; then
   exec "$PRIMARY_NODE" "$@"
@@ -88,8 +93,12 @@ writeExecutable(
   `#!/usr/bin/env bash
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+MANAGED_NODE="$SCRIPT_DIR/../../managed-node/bin/node"
 PRIMARY_NODE="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
-NODE_BIN="\${CODEX_BROWSER_USE_NODE_PATH:-$PRIMARY_NODE}"
+NODE_BIN="\${CODEX_BROWSER_USE_NODE_PATH:-$MANAGED_NODE}"
+if [ ! -x "$NODE_BIN" ]; then
+  NODE_BIN="$PRIMARY_NODE"
+fi
 if [ ! -x "$NODE_BIN" ]; then
   NODE_BIN="$(command -v node)"
 fi
@@ -150,8 +159,12 @@ hydrate_desktop_session_env() {
 
 hydrate_desktop_session_env
 
+MANAGED_NODE="$SCRIPT_DIR/../../../../managed-node/bin/node"
 PRIMARY_NODE="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
-NODE_BIN="\${CODEX_BROWSER_USE_NODE_PATH:-$PRIMARY_NODE}"
+NODE_BIN="\${CODEX_BROWSER_USE_NODE_PATH:-$MANAGED_NODE}"
+if [ ! -x "$NODE_BIN" ]; then
+  NODE_BIN="$PRIMARY_NODE"
+fi
 if [ ! -x "$NODE_BIN" ]; then
   NODE_BIN="$(command -v node)"
 fi

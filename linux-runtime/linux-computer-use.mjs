@@ -11,14 +11,62 @@ const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
 const inputHelper = path.join(runtimeDir, "x11-input.py");
 let active = false;
 
-function requireEnabled() {
+function sessionType() {
+  const explicit = (process.env.XDG_SESSION_TYPE || "").toLowerCase();
+  if (explicit) return explicit;
+  if (process.env.WAYLAND_DISPLAY) return "wayland";
+  if (process.env.DISPLAY) return "x11";
+  return "unknown";
+}
+
+async function hasCommand(command) {
+  try {
+    await run("sh", ["-c", `command -v ${command}`], { timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function desktopCapabilities() {
+  const type = sessionType();
+  const availableBackends = [];
+  const screenshotBackends = [];
+  if (type === "x11" && process.env.DISPLAY) {
+    if (await hasCommand("gnome-screenshot")) screenshotBackends.push("x11-gnome-screenshot");
+    availableBackends.push("x11-python-xtest");
+  }
+  if (type === "wayland") {
+    if (await hasCommand("grim")) screenshotBackends.push("wayland-grim");
+    if (await hasCommand("gnome-screenshot")) screenshotBackends.push("wayland-gnome-screenshot");
+  }
+  availableBackends.push(...screenshotBackends);
+  return {
+    enabled: process.env.CODEX_LINUX_COMPUTER_USE === "1",
+    session_type: type,
+    control_supported: type === "x11" && Boolean(process.env.DISPLAY),
+    read_only_screenshot_supported: screenshotBackends.length > 0,
+    available_backends: availableBackends,
+    limitations:
+      type === "wayland"
+        ? ["Wayland pointer, keyboard, click, type, scroll, drag, and window-control input is not enabled in this build."]
+        : type === "x11"
+          ? []
+          : ["No supported desktop session was detected."],
+  };
+}
+
+function requireEnabled({ control = false } = {}) {
   if (process.env.CODEX_LINUX_COMPUTER_USE !== "1") {
     throw new Error("Linux Computer Use is disabled. Set CODEX_LINUX_COMPUTER_USE=1 and restart Codex.");
   }
-  if ((process.env.XDG_SESSION_TYPE || "").toLowerCase() === "wayland") {
-    throw new Error("Linux Computer Use currently supports X11 only.");
+  if (control && sessionType() !== "x11") {
+    throw new Error(
+      `Wayland desktop input is not available in this build; Computer Use input requires X11. ` +
+        `Use computer_get_capabilities for the available read-only backends.`,
+    );
   }
-  if (!process.env.DISPLAY) {
+  if (control && !process.env.DISPLAY) {
     throw new Error("Linux Computer Use requires an active X11 DISPLAY.");
   }
 }
@@ -105,7 +153,17 @@ async function screenshotContent() {
   const directory = await mkdtemp(path.join(tmpdir(), "codex-linux-cua-"));
   const screenshotPath = path.join(directory, "screen.png");
   try {
-    await run("gnome-screenshot", ["-f", screenshotPath], { timeout: 30_000 });
+    if (sessionType() === "wayland") {
+      if (await hasCommand("grim")) {
+        await run("grim", [screenshotPath], { timeout: 30_000 });
+      } else if (await hasCommand("gnome-screenshot")) {
+        await run("gnome-screenshot", ["-f", screenshotPath], { timeout: 30_000 });
+      } else {
+        throw new Error("Wayland screenshot backend unavailable; install grim or gnome-screenshot.");
+      }
+    } else {
+      await run("gnome-screenshot", ["-f", screenshotPath], { timeout: 30_000 });
+    }
     const image = await readFile(screenshotPath);
     return { type: "image", data: image.toString("base64"), mimeType: "image/png" };
   } finally {
@@ -126,8 +184,13 @@ const pointProperties = {
 
 const tools = [
   {
+    name: "computer_get_capabilities",
+    description: "Report the detected Linux desktop session and available Computer Use backends without controlling the desktop.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "computer_get_state",
-    description: "Capture the X11 desktop and return display dimensions and open windows.",
+    description: "Capture the X11 desktop, or a read-only Wayland screenshot when an optional screenshot backend is available.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -226,13 +289,38 @@ startMcpServer({
   version: "0.1.0",
   tools,
   async callTool(name, args) {
-    requireEnabled();
+    if (name === "computer_get_capabilities") {
+      return textResult(JSON.stringify(await desktopCapabilities(), null, 2));
+    }
+    requireEnabled({ control: name !== "computer_get_state" && name !== "computer_wait" });
     if (active) {
       throw new Error("Another Linux Computer Use request is already active.");
     }
     active = true;
     try {
       if (name === "computer_get_state") {
+        if (sessionType() === "wayland") {
+          const image = await screenshotContent();
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    session_type: "wayland",
+                    display: null,
+                    pointer: null,
+                    windows: [],
+                    limitations: ["Wayland window enumeration and desktop input are unavailable in this build."],
+                  },
+                  null,
+                  2,
+                ),
+              },
+              image,
+            ],
+          };
+        }
         const [size, openWindows, pointerJson, image] = await Promise.all([
           displaySize(),
           windowsWithClientOrigins(),
@@ -251,6 +339,7 @@ startMcpServer({
       }
       if (name === "computer_focus_window") {
         await run("wmctrl", ["-ia", String(args.window_id)]);
+        await new Promise((resolve) => setTimeout(resolve, 100));
       } else if (name === "computer_minimize_all") {
         const openWindows = await windows();
         for (const window of openWindows) {

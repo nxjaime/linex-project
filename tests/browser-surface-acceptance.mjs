@@ -17,12 +17,15 @@ const marketplacePath = path.join(bundledDir, ".agents", "plugins", "marketplace
 
 const browserClient = await readFile(browserClientPath);
 const browserHash = createHash("sha256").update(browserClient).digest("hex");
+const browserSource = browserClient.toString("utf8");
 const browserPlugin = JSON.parse(await readFile(path.join(browserDir, ".codex-plugin", "plugin.json"), "utf8"));
 const marketplace = JSON.parse(await readFile(marketplacePath, "utf8"));
 const marketplaceNames = new Set(marketplace.plugins.map((plugin) => plugin.name));
 
 assert.equal(typeof browserPlugin.name, "string");
 assert.equal(marketplaceNames.has("browser"), true);
+assert.match(browserSource, /linexPerUserBrowserSocketDir/);
+assert.match(browserSource, /CODEX_BROWSER_USE_SOCKET_DIR/);
 
 const report = {
   candidate: {
@@ -32,7 +35,7 @@ const report = {
   },
   iab: {
     status: "requires_live_app",
-    detail: "Candidate assets and trusted browser client are present; live in-app verification is performed after launch.",
+    detail: "Candidate assets and trusted browser client are present; Linux Browser Use sockets are per-user scoped; live in-app verification is performed after launch.",
   },
   chrome: marketplaceNames.has("chrome") && await pathExists(chromeDir)
     ? {

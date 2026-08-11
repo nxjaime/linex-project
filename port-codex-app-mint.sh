@@ -7,6 +7,9 @@ PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-linux-window-ui.js"
 NATIVE_MODULE_PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-native-module-loaders.js"
 LINUX_AUTOMATION_INSTALL_SCRIPT="$PROJECT_DIR/scripts/install-linux-automation.js"
 LINUX_BROWSER_ROUTE_PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-linux-browser-route.js"
+LINUX_BROWSER_SOCKET_SCOPE_PATCH_SCRIPT="$PROJECT_DIR/scripts/patch-browser-client-iab-socket-scope.js"
+UPSTREAM_RELEASE_INFO_SCRIPT="$PROJECT_DIR/scripts/upstream-release-info.py"
+MANAGED_NODE_SCRIPT="$PROJECT_DIR/scripts/managed-node.sh"
 LINUX_RUNTIME_DIR="$PROJECT_DIR/linux-runtime"
 DESKTOP_TEMPLATE="$PROJECT_DIR/templates/codex-desktop.desktop.in"
 
@@ -18,6 +21,8 @@ WORK_DIR="$(mktemp -d)"
 DEFAULT_SOURCE_PATH="$CACHE_DIR/Codex.dmg"
 SOURCE_ARCHIVE="${CODEX_PORT_SOURCE_ARCHIVE:-}"
 SOURCE_URL="${CODEX_PORT_SOURCE_URL:-${CODEX_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}}"
+SOURCE_ARCHIVE_EXPLICIT=0
+[ -n "$SOURCE_ARCHIVE" ] && SOURCE_ARCHIVE_EXPLICIT=1
 ELECTRON_VERSION="${CODEX_ELECTRON_VERSION:-40.0.0}"
 DESKTOP_FILE_PATH="${CODEX_DESKTOP_FILE_PATH:-$HOME/.local/share/applications/codex-desktop.desktop}"
 
@@ -73,6 +78,8 @@ Environment variables:
   CODEX_PORT_INSTALL_DIR     Override the app install directory (default: ./runtime/codex-app).
   CODEX_PORT_CACHE_DIR       Override the cache directory (default: ./runtime/cache).
   CODEX_DESKTOP_FILE_PATH    Override the installed desktop entry path.
+  CODEX_MANAGED_NODE_VERSION Pin the bundled Linux Node runtime (default: 22.14.0).
+  CODEX_MANAGED_NODE_BASE_URL Override the Node distribution base URL for testing.
 EOF
 }
 
@@ -81,7 +88,7 @@ dependency_help() {
 Required tools are missing.
 
 Install them on Linux Mint / Ubuntu with:
-  sudo apt install curl unzip p7zip-full python3 build-essential
+  sudo apt install curl unzip p7zip-full python3 build-essential tar xz-utils
 
 Node.js 20+ with npm/npx is also required.
 Using nvm is fine as long as `node`, `npm`, and `npx` are available in PATH.
@@ -94,11 +101,13 @@ parse_args() {
       --archive)
         [ "$#" -ge 2 ] || error "--archive requires a path"
         SOURCE_ARCHIVE="$2"
+        SOURCE_ARCHIVE_EXPLICIT=1
         shift
         ;;
       --dmg)
         [ "$#" -ge 2 ] || error "--dmg requires a path"
         SOURCE_ARCHIVE="$2"
+        SOURCE_ARCHIVE_EXPLICIT=1
         shift
         ;;
       --fresh)
@@ -135,7 +144,7 @@ check_deps() {
 
   [ "$(uname -s)" = "Linux" ] || error "This script is intended to run on Linux."
 
-  for cmd in node npm npx python3 curl unzip make g++ ; do
+  for cmd in node npm npx python3 curl unzip make g++ tar xz sha256sum ; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
 
@@ -358,6 +367,19 @@ download_electron_runtime() {
   unzip -qo "$electron_zip"
 }
 
+install_managed_node_runtime() {
+  local managed_node_dir="$INSTALL_DIR/resources/managed-node"
+  local managed_node_cache="$CACHE_DIR/managed-node"
+
+  [ -x "$MANAGED_NODE_SCRIPT" ] || error "Managed Node helper is not executable: $MANAGED_NODE_SCRIPT"
+  info "Installing verified managed Node runtime"
+  bash "$MANAGED_NODE_SCRIPT" install \
+    "$managed_node_dir" \
+    "$managed_node_cache" \
+    "${CODEX_MANAGED_NODE_VERSION:-22.14.0}" \
+    "$(uname -m)" >&2
+}
+
 install_app_files() {
   local extracted_app_dir="$1"
   local extracted_asar_dir="$WORK_DIR/app-extracted"
@@ -378,6 +400,14 @@ install_app_files() {
     cp -R "$upstream_resources_dir/plugins" "$INSTALL_DIR/resources/"
   else
     warn "No bundled plugins directory found in the app bundle"
+  fi
+
+  local browser_client_path="$INSTALL_DIR/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs"
+  if [ -f "$browser_client_path" ]; then
+    info "Scoping Linux Browser Use sockets to the current user"
+    node "$LINUX_BROWSER_SOCKET_SCOPE_PATCH_SCRIPT" "$browser_client_path" >&2
+  else
+    warn "Bundled Browser client not found; Browser Use socket isolation was not applied"
   fi
 
   if [ -f "$LINUX_AUTOMATION_INSTALL_SCRIPT" ]; then
@@ -403,6 +433,24 @@ install_app_files() {
   app_build="$(node -p "require('$extracted_asar_dir/package.json').codexBuildNumber")"
   printf '%s\n' "$app_version" > "$INSTALL_DIR/app-version"
   printf '%s\n' "$app_build" > "$INSTALL_DIR/app-build"
+
+  if [ -f "$UPSTREAM_RELEASE_INFO_SCRIPT" ]; then
+    local source_identity_url="$SOURCE_URL"
+    if [ "$SOURCE_ARCHIVE_EXPLICIT" -eq 1 ]; then
+      source_identity_url="file://$SOURCE_ARCHIVE"
+    fi
+    python3 "$UPSTREAM_RELEASE_INFO_SCRIPT" \
+      --archive-url "$source_identity_url" \
+      --version "$app_version" \
+      --build "$app_build" \
+      --archive "$SOURCE_ARCHIVE" \
+      --head > "$INSTALL_DIR/source-fingerprint.json"
+  fi
+
+  if [ -f "$INSTALL_DIR/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" ]; then
+    sha256sum "$INSTALL_DIR/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" \
+      | awk '{print $1}' > "$INSTALL_DIR/browser-client-sha256"
+  fi
 }
 
 create_launcher() {
@@ -490,6 +538,7 @@ start_webview_server() {
 
 main() {
   local codex_cli_path=""
+  local managed_node="$SCRIPT_DIR/resources/managed-node/bin/node"
   local primary_runtime_node="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
   local primary_runtime_modules="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"
 
@@ -506,8 +555,12 @@ main() {
   export CODEX_LINUX_COMPUTER_USE="${CODEX_LINUX_COMPUTER_USE:-1}"
   export CODEX_ELECTRON_BUNDLED_PLUGINS_RESOURCES_PATH="$SCRIPT_DIR/resources"
   export CODEX_ELECTRON_BUNDLED_PLUGINS_FORCE_RELOAD="${CODEX_ELECTRON_BUNDLED_PLUGINS_FORCE_RELOAD:-browser}"
+  export CODEX_MANAGED_NODE_PATH="${CODEX_MANAGED_NODE_PATH:-$managed_node}"
   export CODEX_NODE_REPL_PATH="${CODEX_NODE_REPL_PATH:-$SCRIPT_DIR/resources/cua_node/bin/node_repl}"
-  if [ -x "$primary_runtime_node" ]; then
+  if [ -x "$managed_node" ]; then
+    export PATH="$SCRIPT_DIR/resources/managed-node/bin:$PATH"
+    export CODEX_BROWSER_USE_NODE_PATH="${CODEX_BROWSER_USE_NODE_PATH:-$managed_node}"
+  elif [ -x "$primary_runtime_node" ]; then
     export CODEX_BROWSER_USE_NODE_PATH="${CODEX_BROWSER_USE_NODE_PATH:-$primary_runtime_node}"
   fi
   if [ -d "$primary_runtime_modules" ]; then
@@ -568,6 +621,7 @@ main() {
   extracted_app_dir="$(extract_app_bundle)"
   patch_asar "$extracted_app_dir"
   download_electron_runtime
+  install_managed_node_runtime
   install_app_files "$extracted_app_dir"
   create_launcher
 

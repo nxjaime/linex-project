@@ -20,20 +20,16 @@ jobs:
         env:
           APPCAST_URL: https://persistent.oaistatic.com/codex-app-prod/appcast.xml
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import urllib.request
-          import xml.etree.ElementTree as ET
+          release_json="$(python3 scripts/upstream-release-info.py --appcast "$APPCAST_URL" --head)"
+          python3 - "$release_json" <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import sys
 
-          request = urllib.request.Request(
-              os.environ["APPCAST_URL"],
-              headers={"User-Agent": "Linex/1.0 (+https://github.com/nxjaime/linex-project)"},
-          )
-          root = ET.fromstring(urllib.request.urlopen(request, timeout=30).read())
-          item = root.find("./channel/item")
-          sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
-          print(f"version={item.findtext(sparkle + 'shortVersionString')}")
-          print(f"build={item.findtext(sparkle + 'version')}")
+          report = json.loads(sys.argv[1])
+          for key in ("version", "build", "archive_url", "identity", "etag", "last_modified", "content_length"):
+              value = report.get(key)
+              if value is not None:
+                  print(f"{key}={value}")
           PY
 
       - id: baseline
@@ -47,21 +43,42 @@ jobs:
               if len(fields) >= 6 and fields[2].isdigit():
                   print(f"version={fields[1]}")
                   print(f"build={fields[2]}")
+                  if len(fields) >= 7 and fields[6] and fields[6] != "not-recorded":
+                      print(f"identity={fields[6]}")
                   break
           else:
               raise SystemExit("No compatibility baseline found")
           PY
 
-      - name: Open a verification issue for a new build
-        if: steps.appcast.outputs.version != steps.baseline.outputs.version
+      - name: Open a verification issue for a new build or archive identity
+        if: steps.appcast.outputs.version != steps.baseline.outputs.version || steps.appcast.outputs.build != steps.baseline.outputs.build || (steps.baseline.outputs.identity != '' && steps.baseline.outputs.identity != steps.appcast.outputs.identity)
         env:
           GH_TOKEN: ${{ github.token }}
           LATEST_VERSION: ${{ steps.appcast.outputs.version }}
           LATEST_BUILD: ${{ steps.appcast.outputs.build }}
+          LATEST_IDENTITY: ${{ steps.appcast.outputs.identity }}
+          LATEST_ARCHIVE_URL: ${{ steps.appcast.outputs.archive_url }}
+          LATEST_ETAG: ${{ steps.appcast.outputs.etag }}
+          LATEST_LAST_MODIFIED: ${{ steps.appcast.outputs.last_modified }}
+          LATEST_CONTENT_LENGTH: ${{ steps.appcast.outputs.content_length }}
           VERIFIED_VERSION: ${{ steps.baseline.outputs.version }}
+          VERIFIED_BUILD: ${{ steps.baseline.outputs.build }}
+          VERIFIED_IDENTITY: ${{ steps.baseline.outputs.identity }}
         run: |
-          title="Verify Codex app ${LATEST_VERSION} on Linux Mint"
-          if gh issue list --state open --search "\"${title}\" in:title" --json title --jq 'length > 0' | grep -qx true; then
+          marker="upstream-fingerprint:${LATEST_IDENTITY}"
+          title="Verify Codex app ${LATEST_VERSION} build ${LATEST_BUILD} on Linux Mint"
+          if gh issue list --state open --search "\"${marker}\" in:body" --json number --jq 'length > 0' | grep -qx true; then
             exit 0
           fi
-          gh issue create --title "$title" --body "Upstream build ${LATEST_BUILD} is newer than the verified Linux Mint baseline ${VERIFIED_VERSION}. Rebuild, run the smoke tests, perform a human desktop verification, then update docs/compatibility.md before closing this issue."
+          gh issue create --title "$title" --body "Upstream build ${LATEST_BUILD} is newer than or differs from the verified Linux Mint baseline ${VERIFIED_VERSION} build ${VERIFIED_BUILD}.
+
+          Verified identity: ${VERIFIED_IDENTITY:-not-recorded}
+
+          ${marker}
+
+          Archive: ${LATEST_ARCHIVE_URL:-unknown}
+          ETag: ${LATEST_ETAG:-unknown}
+          Last-Modified: ${LATEST_LAST_MODIFIED:-unknown}
+          Content-Length: ${LATEST_CONTENT_LENGTH:-unknown}
+
+          Rebuild the candidate, run the automated gates, perform human desktop verification, and update docs/compatibility.md before closing this issue. This workflow only detects and records the candidate; it never installs or promotes it."
