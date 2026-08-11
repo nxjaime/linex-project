@@ -90,14 +90,14 @@ Build, verify, and release an update safely:
 ```bash
 cd <project-dir>
 ./scripts/linex-release.sh check
-./scripts/linex-release.sh build-candidate 26.721.81911
+./scripts/linex-release.sh build-candidate 26.803.81509
 # Launch the candidate and perform the listed human checks.
-./scripts/linex-release.sh approve 26.721.81911
-./scripts/linex-release.sh promote 26.721.81911
+./scripts/linex-release.sh approve 26.803.81509
+./scripts/linex-release.sh promote 26.803.81509
 # Close the current desktop app. The queued local service switches and opens
 # the approved replacement after it exits.
 ./scripts/linex-release.sh handoff-status
-./scripts/linex-release.sh rollback 26.721.41059
+./scripts/linex-release.sh rollback 26.803.61601
 ```
 
 Each generated runtime records the upstream archive identity in
